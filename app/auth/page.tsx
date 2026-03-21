@@ -4,15 +4,14 @@ import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { useFirebaseAuth } from '@/lib/use-firebase-auth';
+import { LogIn } from 'lucide-react';
 
 export default function LoginPage() {
   const router = useRouter();
   const { user } = useAuth();
-  const { login, register, loading, error, setError } = useFirebaseAuth();
-  const [isRegister, setIsRegister] = useState(false);
+  const { login, loading, error, setError } = useFirebaseAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
 
   React.useEffect(() => {
     if (user) {
@@ -29,41 +28,28 @@ export default function LoginPage() {
       return;
     }
 
-    if (isRegister) {
-      if (password !== confirmPassword) {
-        setError('Senhas não conferem');
-        return;
-      }
-      if (password.length < 6) {
-        setError('Senha deve ter no mínimo 6 caracteres');
-        return;
-      }
-
-      try {
-        await register(email, password);
-        router.push('/dashboard');
-      } catch (err) {
-        console.error('Erro ao registrar:', err);
-      }
-    } else {
-      try {
-        await login(email, password);
-        router.push('/dashboard');
-      } catch (err) {
-        console.error('Erro ao fazer login:', err);
-      }
+    try {
+      await login(email, password);
+      router.push('/dashboard');
+    } catch (err) {
+      console.error('Erro ao fazer login:', err);
     }
   };
 
   return (
-    <div className="min-h-screen bg-linear-to-br from-blue-50 to-indigo-100 flex items-center justify-center px-4">
-      <div className="bg-white rounded-lg shadow-xl p-8 w-full max-w-md">
-        <div className="text-center mb-8">
-     
-          <p className="text-gray-600 text-lg ">Sistema de Gestão</p>
+    <div className="min-h-screen bg-white flex items-center justify-center px-4">
+      <div className="w-full max-w-md">
+        <div className="text-center mb-12">
+          <div className="flex items-center justify-center gap-3 mb-6">
+            <div className="bg-slate-950 p-2 rounded-lg">
+              <LogIn className="w-6 h-6 text-white" />
+            </div>
+            <h1 className="text-2xl font-bold text-slate-900">Inventário</h1>
+          </div>
+          <p className="text-slate-600 text-sm">Sistema de Gestão de Bens</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-5">
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
               {error}
@@ -71,73 +57,47 @@ export default function LoginPage() {
           )}
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-semibold text-slate-700 mb-2">
               Email
             </label>
             <input
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg  focus:ring-blue-500 "
+              className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-slate-900 font-medium outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all placeholder:text-slate-400"
               placeholder="seu@email.com"
               disabled={loading}
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-semibold text-slate-700 mb-2">
               Senha
             </label>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-slate-900 font-medium outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all placeholder:text-slate-400"
               placeholder="••••••"
               disabled={loading}
             />
           </div>
 
-          {isRegister && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Confirmar Senha
-              </label>
-              <input
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="••••••"
-                disabled={loading}
-              />
-            </div>
-          )}
-
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition disabled:bg-gray-400 disabled:cursor-not-allowed"
+            className="w-full bg-slate-950 hover:bg-slate-900 text-white font-semibold py-2.5 px-4 rounded-lg transition active:scale-[0.98] disabled:bg-slate-400 disabled:cursor-not-allowed"
           >
-            {loading ? 'Processando...' : isRegister ? 'Criar Conta' : 'Entrar'}
+            {loading ? 'Entrando...' : 'Entrar no Sistema'}
           </button>
         </form>
 
-        <div className="mt-6 text-center">
-          <button
-            type="button"
-            onClick={() => {
-              setIsRegister(!isRegister);
-              setError(null);
-            }}
-            className="text-blue-600 hover:text-blue-700 text-sm font-medium"
-          >
-            {isRegister
-              ? 'Já tem conta? Faça login'
-              : 'Não tem conta? Registre-se'}
-          </button>
+        <div className="mt-8 pt-8 border-t border-slate-100">
+          <p className="text-center text-slate-500 text-xs">
+            Sistema de Gestão de Bens - Interno
+          </p>
         </div>
-
       </div>
     </div>
   );

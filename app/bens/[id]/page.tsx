@@ -297,7 +297,7 @@ export default function BemDetailPage() {
                           setMovimentacao((prev) => ({ ...prev, acao: e.target.value }))
                         }
                         placeholder="Ex: Enviado para conserto, Transferido para TI, Emprestado"
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500 focus:border-transparent text-sm"
                         rows={2}
                         disabled={saving}
                         required
@@ -314,7 +314,7 @@ export default function BemDetailPage() {
                           setMovimentacao((prev) => ({ ...prev, detalhes: e.target.value }))
                         }
                         placeholder="Informações adicionais..."
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500 focus:border-transparent text-sm"
                         rows={2}
                         disabled={saving}
                       />
@@ -333,7 +333,7 @@ export default function BemDetailPage() {
                               novo_status: e.target.value as typeof movimentacao.novo_status,
                             }))
                           }
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500 focus:border-transparent text-sm"
                           disabled={saving}
                         >
                           {STATUS_OPTIONS.map((status) => (
@@ -357,7 +357,7 @@ export default function BemDetailPage() {
                               novo_departamento: e.target.value,
                             }))
                           }
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500 focus:border-transparent text-sm"
                           disabled={saving}
                         />
                       </div>
@@ -375,7 +375,7 @@ export default function BemDetailPage() {
                               novo_responsavel: e.target.value,
                             }))
                           }
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500 focus:border-transparent text-sm"
                           disabled={saving}
                         />
                       </div>

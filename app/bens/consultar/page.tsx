@@ -1,12 +1,13 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { db } from '@/lib/firebase';
-import { collection, onSnapshot } from 'firebase/firestore';
+import { collection, onSnapshot, doc, updateDoc } from 'firebase/firestore';
 import Toast from '@/app/components/Toast';
-import { X, Edit, History, Loader2, Plus, ChevronDown } from 'lucide-react';
+import SearchableSelect from '@/app/components/SearchableSelect';
+import { X, Edit, History, Loader2, Plus, Filter, RotateCcw, Box, DollarSign, ChevronDown } from 'lucide-react';
 import { Bem } from '@/lib/types';
 import { useGestaoData } from '@/lib/useGestaoData';
 import Link from 'next/link';
@@ -16,497 +17,565 @@ export default function ConsultaBensPage() {
   const { user, loading: authLoading } = useAuth();
   const { categorias, departamentos, status, marcas, loading: gestaoLoading } = useGestaoData();
   
+  const [allBens, setAllBens] = useState<(Bem & { id: string })[]>([]);
   const [bens, setBens] = useState<(Bem & { id: string })[]>([]);
   const [loading, setLoading] = useState(true);
   const [showToast, setShowToast] = useState(false);
-  const [toastMessage, setToastMessage] = useState('');
-  const [expandedCard, setExpandedCard] = useState<string | null>(null);
+  const [isFilterVisible, setIsFilterVisible] = useState(true);
+  const [selectedBemHistory, setSelectedBemHistory] = useState<(Bem & { id: string }) | null>(null);
+  const [selectedBemEdit, setSelectedBemEdit] = useState<(Bem & { id: string }) | null>(null);
+  const [editFormData, setEditFormData] = useState<Partial<Bem>>({});
+  const [isSaving, setIsSaving] = useState(false);
 
-  // Filtros
   const [filters, setFilters] = useState({
-    nome_item: '',
-    marca: '',
-    categoria: '',
-    departamento: '',
-    responsavel: '',
-    localizacao: '',
-    status: '',
-    numero_serie: '',
+    nome_item: '', marca: '', categoria: '', departamento: '',
+    responsavel: '', localizacao: '', status: '', numero_serie: '',
   });
 
-  const [allBens, setAllBens] = useState<(Bem & { id: string })[]>([]);
+  const stats = useMemo(() => {
+    const totalItems = bens.reduce((acc, b) => acc + (Number(b.qtde) || 0), 0);
+    const totalValue = bens.reduce((acc, b) => acc + (Number(b.valor) || 0), 0);
+    return { totalItems, totalValue };
+  }, [bens]);
 
   useEffect(() => {
-    if (!authLoading && !user) {
-      router.push('/auth');
-    }
+    if (!authLoading && !user) router.push('/auth');
   }, [user, authLoading, router]);
 
   useEffect(() => {
     if (!user) return;
-
     setLoading(true);
     const unsubscribe = onSnapshot(collection(db, 'bens'), (snapshot) => {
-      const bensData: (Bem & { id: string })[] = [];
-      snapshot.forEach((doc) => {
-        bensData.push({
-          id: doc.id,
-          ...doc.data(),
-        } as Bem & { id: string });
-      });
-
+      const bensData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Bem & { id: string }));
       setAllBens(bensData);
       setBens(bensData);
       setLoading(false);
     });
-
     return () => unsubscribe();
   }, [user]);
 
-  const handleFilterChange = (field: string, value: string) => {
-    setFilters((prev) => ({
-      ...prev,
-      [field]: value,
-    }));
-  };
-
   const handleSearch = () => {
-    let filtered = allBens;
-
-    if (filters.nome_item) {
-      filtered = filtered.filter((bem) =>
-        bem.nome_item?.toLowerCase().includes(filters.nome_item.toLowerCase())
-      );
-    }
-    if (filters.marca) {
-      filtered = filtered.filter((bem) =>
-        bem.marca?.toLowerCase().includes(filters.marca.toLowerCase())
-      );
-    }
-    if (filters.categoria) {
-      filtered = filtered.filter((bem) => bem.categoria === filters.categoria);
-    }
-    if (filters.departamento) {
-      filtered = filtered.filter((bem) => bem.departamento === filters.departamento);
-    }
-    if (filters.responsavel) {
-      filtered = filtered.filter((bem) =>
-        bem.responsavel?.toLowerCase().includes(filters.responsavel.toLowerCase())
-      );
-    }
-    if (filters.localizacao) {
-      filtered = filtered.filter((bem) =>
-        bem.localizacao?.toLowerCase().includes(filters.localizacao.toLowerCase())
-      );
-    }
-    if (filters.status) {
-      filtered = filtered.filter((bem) => bem.status === filters.status);
-    }
-    if (filters.numero_serie) {
-      filtered = filtered.filter((bem) =>
-        bem.numero_serie?.toLowerCase().includes(filters.numero_serie.toLowerCase())
-      );
-    }
-
+    let filtered = allBens.filter(bem => {
+      return Object.entries(filters).every(([key, value]) => {
+        if (!value) return true;
+        const bemValue = (bem as any)[key]?.toString().toLowerCase() || '';
+        return bemValue.includes(value.toLowerCase());
+      });
+    });
     setBens(filtered);
   };
 
-  const handleClearFilters = () => {
-    setFilters({
-      nome_item: '',
-      marca: '',
-      categoria: '',
-      departamento: '',
-      responsavel: '',
-      localizacao: '',
-      status: '',
-      numero_serie: '',
-    });
+  const clearFilters = () => {
+    setFilters({ nome_item: '', marca: '', categoria: '', departamento: '', responsavel: '', localizacao: '', status: '', numero_serie: '' });
     setBens(allBens);
-    setToastMessage('Filtros limpos!');
-    setShowToast(true);
+  };
+
+  const handleOpenHistory = (bem: Bem & { id: string }) => {
+    setSelectedBemHistory(bem);
+  };
+
+  const handleCloseHistory = () => {
+    setSelectedBemHistory(null);
+  };
+
+  const handleOpenEdit = (bem: Bem & { id: string }) => {
+    setSelectedBemEdit(bem);
+    setEditFormData({ ...bem });
+  };
+
+  const handleCloseEdit = () => {
+    setSelectedBemEdit(null);
+    setEditFormData({});
+  };
+
+  const handleSaveEdit = async () => {
+    if (!selectedBemEdit) return;
+    
+    try {
+      setIsSaving(true);
+      const bemRef = doc(db, 'bens', selectedBemEdit.id);
+      
+      const updateData = {
+        nome_item: editFormData.nome_item || selectedBemEdit.nome_item,
+        categoria: editFormData.categoria || selectedBemEdit.categoria,
+        marca: editFormData.marca || selectedBemEdit.marca,
+        codigo_modelo: editFormData.codigo_modelo || selectedBemEdit.codigo_modelo,
+        numero_serie: editFormData.numero_serie || selectedBemEdit.numero_serie,
+        qtde: editFormData.qtde || selectedBemEdit.qtde,
+        departamento: editFormData.departamento || selectedBemEdit.departamento,
+        localizacao: editFormData.localizacao || selectedBemEdit.localizacao,
+        responsavel: editFormData.responsavel || selectedBemEdit.responsavel,
+        data_aquisicao: editFormData.data_aquisicao || selectedBemEdit.data_aquisicao,
+        valor: editFormData.valor || selectedBemEdit.valor,
+        status: editFormData.status || selectedBemEdit.status,
+        modelo_processador: editFormData.modelo_processador || selectedBemEdit.modelo_processador,
+        ram: editFormData.ram || selectedBemEdit.ram,
+        armazenamento: editFormData.armazenamento || selectedBemEdit.armazenamento,
+        atualizado_em: new Date().toISOString(),
+      };
+
+      await updateDoc(bemRef, updateData);
+      
+      setShowToast(true);
+      handleCloseEdit();
+      setTimeout(() => setShowToast(false), 3000);
+    } catch (error) {
+      console.error('Erro ao salvar:', error);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   if (authLoading || loading || gestaoLoading) {
     return (
       <div className="h-screen flex items-center justify-center bg-white">
-        <Loader2 className="animate-spin text-slate-300 w-8 h-8" />
+        <Loader2 className="animate-spin text-black w-8 h-8" />
       </div>
     );
   }
 
-  const inputClass = "w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-900 text-sm font-medium transition-all outline-none focus:ring-1 focus:ring-slate-950 focus:border-slate-950 placeholder:text-slate-400";
-  const labelClass = "block text-sm font-medium text-slate-700 mb-2";
-
-  const getStatusColor = (status: string) => {
-    return status === 'Em uso' ? 'bg-green-100 text-green-700' :
-           status === 'Conserto' ? 'bg-yellow-100 text-yellow-700' :
-           status === 'Emprestado' ? 'bg-blue-100 text-blue-700' :
-           status === 'Sucata' || status === 'Descartado' ? 'bg-red-100 text-red-700' :
-           'bg-slate-100 text-slate-700';
-  };
+  const labelStyle = "block text-xs font-semibold text-slate-700 mb-1";
+  const inputStyle = "w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-sm text-black placeholder:text-slate-400 focus:border-amber-400 outline-none transition-all";
+  const thStyle = "px-3 py-3 text-left text-[11px] font-bold text-slate-500 uppercase tracking-tight border-b border-slate-200 whitespace-nowrap bg-slate-50";
 
   return (
-    <div className="min-h-screen bg-white">
-      {showToast && (
-        <Toast 
-          message={toastMessage} 
-          type="success" 
-          duration={2000}
-          onClose={() => setShowToast(false)}
-        />
-      )}
+    <div className="min-h-screen bg-white text-black">
+      {showToast && <Toast message="Ação realizada" type="success" onClose={() => setShowToast(false)} />}
 
-      {/* navbar */}
-      <nav className="border-b border-slate-100 px-6 h-14 flex items-center justify-between sticky top-0 bg-white/90 backdrop-blur-md z-30">
+      <nav className="border-b border-slate-200 px-6 h-14 flex items-center justify-between sticky top-0 bg-white z-40">
         <div className="flex items-center gap-4">
-          <h1 className="text-gray-800 text-base font-bold ">Consulta de Bens</h1>
+          <h1 className="text-lg font-bold tracking-tight">Consulta de bens</h1>
         </div>
-        <Link href="/bens/novo">
-          <button className="flex items-center gap-2 px-4 py-2 bg-slate-950 text-white text-xs font-black rounded-lg hover:shadow-lg transition">
-            <Plus className="w-4 h-4" />
-            + Novo Bem
+        <div className="flex items-center gap-4">
+          <button onClick={() => setIsFilterVisible(!isFilterVisible)} className="text-sm  flex items-center gap-2 hover:text-slate-600">
+            <Filter className="w-4 h-4" /> {isFilterVisible ? 'Ocultar filtros' : 'Mostrar filtros'}
           </button>
-        </Link>
+          <Link href="/bens/novo">
+            <button className="bg-black text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-slate-800 transition flex items-center gap-2">
+              <Plus className="w-4 h-4" /> Novo bem
+            </button>
+          </Link>
+        </div>
       </nav>
 
-      {/* filtros */}
-      <div className="bg-slate-50/50 border-b border-slate-100 p-6">
-        <div className="max-w-full">
-          <h2 className="text-sm font-bold text-slate-900 mb-4">Filtros de Busca</h2>
-          
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
-            <div>
-              <label className={labelClass}>Nome do Item</label>
-              <input
-                type="text"
-                placeholder="Ex: Servidor..."
-                value={filters.nome_item}
-                onChange={(e) => handleFilterChange('nome_item', e.target.value)}
-                className={inputClass}
-              />
-            </div>
-
-            <div>
-              <label className={labelClass}>Marca</label>
-              <input
-                type="text"
-                placeholder="Ex: Dell..."
-                value={filters.marca}
-                onChange={(e) => handleFilterChange('marca', e.target.value)}
-                className={inputClass}
-              />
-            </div>
-
-            <div>
-              <label className={labelClass}>Categoria</label>
-              <select
-                value={filters.categoria}
-                onChange={(e) => handleFilterChange('categoria', e.target.value)}
-                className={inputClass}
-              >
-                <option value="">Todas</option>
-                {categorias.map((cat) => (
-                  <option key={cat.id} value={cat.nome}>
-                    {cat.nome}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className={labelClass}>Departamento</label>
-              <select
-                value={filters.departamento}
-                onChange={(e) => handleFilterChange('departamento', e.target.value)}
-                className={inputClass}
-              >
-                <option value="">Todos</option>
-                {departamentos.map((dept) => (
-                  <option key={dept.id} value={dept.nome}>
-                    {dept.nome}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className={labelClass}>Responsável</label>
-              <input
-                type="text"
-                placeholder="Ex: João..."
-                value={filters.responsavel}
-                onChange={(e) => handleFilterChange('responsavel', e.target.value)}
-                className={inputClass}
-              />
-            </div>
-
-            <div>
-              <label className={labelClass}>Localização</label>
-              <input
-                type="text"
-                placeholder="Ex: Sala 202..."
-                value={filters.localizacao}
-                onChange={(e) => handleFilterChange('localizacao', e.target.value)}
-                className={inputClass}
-              />
-            </div>
-
-            <div>
-              <label className={labelClass}>Status</label>
-              <select
-                value={filters.status}
-                onChange={(e) => handleFilterChange('status', e.target.value)}
-                className={inputClass}
-              >
-                <option value="">Todos</option>
-                {status.map((s) => (
-                  <option key={s.id} value={s.nome}>
-                    {s.nome}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className={labelClass}>Número de Série</label>
-              <input
-                type="text"
-                placeholder="SN..."
-                value={filters.numero_serie}
-                onChange={(e) => handleFilterChange('numero_serie', e.target.value)}
-                className={inputClass}
-              />
-            </div>
-          </div>
-
-          {/* botoes de Ação */}
-          <div className="flex items-center gap-3">
-            <button
-              onClick={handleSearch}
-              className="flex items-center gap-2 px-4 py-2 bg-slate-950 text-white text-xs font-bold rounded-lg hover:bg-slate-900 transition"
-            >
-              Pesquisar
-            </button>
-            <button
-              onClick={handleClearFilters}
-              className="flex items-center gap-2 px-4 py-2 bg-slate-100 text-slate-600 text-xs font-bold rounded-lg hover:bg-slate-200 transition"
-            >
-              <X className="w-4 h-4" />
-              Limpar Campos
-            </button>
-            <span className="text-xs text-slate-500 font-medium">
-              {bens.length} resultado{bens.length !== 1 ? 's' : ''}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* resultados */}
       <main className="p-6">
-        {bens.length === 0 ? (
-          <div className="bg-slate-50/50 rounded-2xl border border-slate-100 p-12 text-center">
-            <p className="text-slate-500 text-sm">Nenhum bem encontrado com os filtros selecionados.</p>
-          </div>
-        ) : (
-          <>
-
-            <div className="hidden lg:block overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-slate-200 bg-slate-50">
-                    <th className="px-3 py-2 text-left  text-slate-600 ">Ações</th>
-                    <th className="px-3 py-2 text-left  text-slate-600 ">Nome</th>
-                    <th className="px-3 py-2 text-left  text-slate-600 ">Categoria</th>
-                    <th className="px-3 py-2 text-left  text-slate-600 ">Marca</th>
-                    <th className="px-3 py-2 text-left  text-slate-600 ">Modelo</th>
-                    <th className="px-3 py-2 text-left  text-slate-600 ">SN</th>
-                    <th className="px-3 py-2 text-left  text-slate-600 ">Processador</th>
-                    <th className="px-3 py-2 text-left  text-slate-600 ">RAM</th>
-                    <th className="px-3 py-2 text-left  text-slate-600 ">Armazenamento</th>
-                    <th className="px-3 py-2 text-left  text-slate-600 ">Qtde</th>
-                    <th className="px-3 py-2 text-left  text-slate-600 ">Departamento</th>
-                    <th className="px-3 py-2 text-left  text-slate-600 ">Localização</th>
-                    <th className="px-3 py-2 text-left  text-slate-600 ">Responsável</th>
-                    <th className="px-3 py-2 text-left  text-slate-600 ">Data Aquisição</th>
-                    <th className="px-3 py-2 text-left  text-slate-600 ">Valor (R$)</th>
-                    <th className="px-3 py-2 text-left  text-slate-600 ">Status</th>
-                    <th className="px-3 py-2 text-left  text-slate-600 ">Cdastrado por</th>
-                    <th className="px-3 py-2 text-left  text-slate-600 ">Dt.Cadastro</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {bens.map((bem) => (
-                    <tr key={bem.id} className="border-b border-slate-100 hover:bg-slate-50 transition">
-                      <td className="px-3 py-2 whitespace-nowrap">
-                        <div className="flex items-center gap-1">
-                          <button 
-                            onClick={() => router.push(`/bens/${bem.id}`)}
-                            className="p-1 hover:bg-blue-100 rounded text-blue-600 hover:text-blue-700"
-                            title="Editar"
-                          >
-                            <Edit className="w-4 h-4" />
-                          </button>
-                          <button 
-                            onClick={() => setExpandedCard(bem.id)}
-                            className="p-1 hover:bg-orange-100 rounded text-orange-600 hover:text-orange-700"
-                            title="Ver Histórico"
-                          >
-                            <History className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
-                      <td className="px-3 py-2 font-medium text-slate-900">{bem.nome_item}</td>
-                      <td className="px-3 py-2 text-slate-600">{bem.categoria}</td>
-                      <td className="px-3 py-2 text-slate-600">{bem.marca || '—'}</td>
-                      <td className="px-3 py-2 text-slate-600">{bem.codigo_modelo || '—'}</td>
-                      <td className="px-3 py-2 text-slate-600 font-mono text-[10px]">{bem.numero_serie || '—'}</td>
-                      <td className="px-3 py-2 text-slate-600">{bem.modelo_processador || '—'}</td>
-                      <td className="px-3 py-2 text-slate-600">{bem.ram || '—'}</td>
-                      <td className="px-3 py-2 text-slate-600">{bem.armazenamento || '—'}</td>
-                      <td className="px-3 py-2 text-slate-600 text-center">{bem.qtde}</td>
-                      <td className="px-3 py-2 text-slate-600">{bem.departamento}</td>
-                      <td className="px-3 py-2 text-slate-600">{bem.localizacao}</td>
-                      <td className="px-3 py-2 text-slate-600">{bem.responsavel || '—'}</td>
-                      <td className="px-3 py-2 text-slate-600 text-[10px]">{bem.data_aquisicao}</td>
-                      <td className="px-3 py-2 text-slate-600 text-right">R$ {bem.valor?.toFixed(2) || '0,00'}</td>
-                      <td className="px-3 py-2">
-                        <span className={`px-2 py-1 rounded-full text-[10px] font-bold truncate ${getStatusColor(bem.status)}`}>
-                          {bem.status}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-slate-600 text-[10px]">{bem.criado_por}</td>
-                      <td className="px-3 py-2 text-slate-600 text-[10px]">{bem.criado_em?.substring(0, 10)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        {isFilterVisible && (
+          <section className="bg-white border border-slate-200 rounded-xl p-6 mb-6 shadow-sm">
+            {/* Primeira linha: inputs de digitação */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+              <div>
+                <label className={labelStyle}>Nome do item</label>
+                <input className={inputStyle} placeholder="Ex: Servidor..." value={filters.nome_item} onChange={(e) => setFilters({...filters, nome_item: e.target.value})} />
+              </div>
+              <div>
+                <label className={labelStyle}>Responsável</label>
+                <input className={inputStyle} placeholder="Ex: João..." value={filters.responsavel} onChange={(e) => setFilters({...filters, responsavel: e.target.value})} />
+              </div>
+              <div>
+                <label className={labelStyle}>Localização</label>
+                <input className={inputStyle} placeholder="Ex: Sala 202..." value={filters.localizacao} onChange={(e) => setFilters({...filters, localizacao: e.target.value})} />
+              </div>
+              <div>
+                <label className={labelStyle}>Número de série</label>
+                <input className={inputStyle} placeholder="SN..." value={filters.numero_serie} onChange={(e) => setFilters({...filters, numero_serie: e.target.value})} />
+              </div>
             </div>
 
-            {/* Tablet/Mobile: Cards Expandíveis */}
-            <div className="lg:hidden space-y-3">
-              {bens.map((bem) => (
-                <div key={bem.id} className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
-                  {/* Header do Card */}
-                  <div className="p-4 bg-linear-to-r from-slate-50 to-slate-100 border-b border-slate-100">
-                    <div className="flex items-start justify-between mb-2">
-                      <div className="flex-1">
-                        <h3 className="font-bold text-slate-900 text-sm">{bem.nome_item}</h3>
-                        <p className="text-xs text-slate-500 mt-1">{bem.categoria} - {bem.marca || 'Sem marca'}</p>
+            {/* Segunda linha: campos de seleção */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+              <div>
+                <SearchableSelect
+                  label="Marca"
+                  options={marcas}
+                  value={marcas.find(m => m.nome === filters.marca)?.id || ''}
+                  onChange={(id) => {
+                    const marca = marcas.find(m => m.id === id);
+                    setFilters({...filters, marca: marca?.nome || ''});
+                  }}
+                  placeholder="Todas"
+                />
+              </div>
+              <div>
+                <SearchableSelect
+                  label="Categoria"
+                  options={categorias}
+                  value={categorias.find(c => c.nome === filters.categoria)?.id || ''}
+                  onChange={(id) => {
+                    const categoria = categorias.find(c => c.id === id);
+                    setFilters({...filters, categoria: categoria?.nome || ''});
+                  }}
+                  placeholder="Todas"
+                />
+              </div>
+              <div>
+                <SearchableSelect
+                  label="Departamento"
+                  options={departamentos}
+                  value={departamentos.find(d => d.nome === filters.departamento)?.id || ''}
+                  onChange={(id) => {
+                    const departamento = departamentos.find(d => d.id === id);
+                    setFilters({...filters, departamento: departamento?.nome || ''});
+                  }}
+                  placeholder="Todos"
+                />
+              </div>
+              <div>
+                <SearchableSelect
+                  label="Status"
+                  options={status}
+                  value={status.find(s => s.nome === filters.status)?.id || ''}
+                  onChange={(id) => {
+                    const st = status.find(s => s.id === id);
+                    setFilters({...filters, status: st?.nome || ''});
+                  }}
+                  placeholder="Todos"
+                />
+              </div>
+            </div>
+
+            <div className="mt-6 flex items-center justify-end gap-3">
+              <button onClick={clearFilters} className="text-xs font-bold text-slate-500 hover:text-black flex items-center gap-1">
+                <RotateCcw className="w-3 h-3" /> Limpar campos
+              </button>
+              <button onClick={handleSearch} className="bg-black text-white px-6 py-2 rounded-lg text-xs font-bold hover:bg-slate-800 transition">
+                Pesquisar
+              </button>
+            </div>
+          </section>
+        )}
+
+        <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm flex flex-col max-h-[75vh]">
+          <div className="overflow-x-auto overflow-y-auto">
+            <table className="w-full border-collapse text-xs">
+              <thead>
+                <tr>
+                  <th className={`${thStyle} sticky left-0 z-20 border-r`}>Ações</th>
+                  <th className={thStyle}>Nome</th>
+                  <th className={thStyle}>Categoria</th>
+                  <th className={thStyle}>Marca</th>
+                  <th className={thStyle}>Modelo</th>
+                  <th className={thStyle}>Série (SN)</th>
+                  <th className={thStyle}>Processador</th>
+                  <th className={thStyle}>RAM</th>
+                  <th className={thStyle}>Armazenamento</th>
+                  <th className={thStyle}>Qtde</th>
+                  <th className={thStyle}>Departamento</th>
+                  <th className={thStyle}>Localização</th>
+                  <th className={thStyle}>Responsável</th>
+                  <th className={thStyle}>Data aquisição</th>
+                  <th className={thStyle}>Valor (R$)</th>
+                  <th className={thStyle}>Status</th>
+                  <th className={thStyle}>Cadastrado por</th>
+                  <th className={thStyle}>Dt. Cadastro</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 bg-white">
+                {bens.map((bem) => (
+                  <tr key={bem.id} className="hover:bg-slate-50 transition-colors group">
+                    <td className="px-3 py-2 sticky left-0 bg-white group-hover:bg-slate-50 z-10 border-r border-slate-100">
+                      <div className="flex items-center gap-1">
+                        <button onClick={() => handleOpenEdit(bem)} className="p-1 hover:bg-black hover:text-white rounded transition text-slate-400">
+                          <Edit className="w-3.5 h-3.5" />
+                        </button>
+                        <button onClick={() => handleOpenHistory(bem)} className="p-1 hover:bg-black hover:text-white rounded transition text-slate-400">
+                          <History className="w-3.5 h-3.5" />
+                        </button>
                       </div>
-                      <span className={`px-2 py-1 rounded-full text-[10px] font-bold whitespace-nowrap ml-2 ${getStatusColor(bem.status)}`}>
+                    </td>
+                    <td className="px-3 py-2 font-bold text-slate-900">{bem.nome_item}</td>
+                    <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{bem.categoria}</td>
+                    <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{bem.marca || '—'}</td>
+                    <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{bem.codigo_modelo || '—'}</td>
+                    <td className="px-3 py-2 text-slate-500 font-mono text-[10px] uppercase">{bem.numero_serie || '—'}</td>
+                    <td className="px-3 py-2 text-slate-600">{bem.modelo_processador || '—'}</td>
+                    <td className="px-3 py-2 text-slate-600">{bem.ram || '—'}</td>
+                    <td className="px-3 py-2 text-slate-600">{bem.armazenamento || '—'}</td>
+                    <td className="px-3 py-2 text-center font-bold text-slate-900">{bem.qtde}</td>
+                    <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{bem.departamento}</td>
+                    <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{bem.localizacao}</td>
+                    <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{bem.responsavel || '—'}</td>
+                    <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{bem.data_aquisicao}</td>
+                    <td className="px-3 py-2 text-right font-bold text-black whitespace-nowrap">
+                      {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(bem.valor || 0)}
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className="px-2 py-0.5 border bg-green-500 text-white rounded text-[10px] font-bold whitespace-nowrap">
                         {bem.status}
                       </span>
-                    </div>
+                    </td>
+                    <td className="px-3 py-2 text-slate-500 text-[10px]">{bem.criado_por}</td>
+                    <td className="px-3 py-2 text-slate-500 text-[10px]">{bem.criado_em?.substring(0, 10)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
-                    {/* Botões de Ação */}
-                    <div className="flex items-center gap-2 mt-3">
-                      <button 
-                        onClick={() => router.push(`/bens/${bem.id}`)}
-                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-blue-600 text-white text-xs font-bold rounded-lg hover:bg-blue-700 transition"
-                      >
-                        <Edit className="w-4 h-4" />
-                        Editar
-                      </button>
-                      <button 
-                        onClick={() => setExpandedCard(expandedCard === bem.id ? null : bem.id)}
-                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-orange-600 text-white text-xs font-bold rounded-lg hover:bg-orange-700 transition"
-                      >
-                        <History className="w-4 h-4" />
-                        Histórico
-                      </button>
-                    </div>
-                  </div>
-
-          
-                  {expandedCard === bem.id && (
-                    <div className="p-4 bg-slate-50 space-y-3 border-t border-slate-100">
-                      <div className="grid grid-cols-2 gap-3 text-xs">
-                        <div>
-                          <p className="text-slate-500 font-bold">Modelo</p>
-                          <p className="text-slate-900">{bem.codigo_modelo || '—'}</p>
-                        </div>
-                        <div>
-                          <p className="text-slate-500 font-bold">Nº Série</p>
-                          <p className="text-slate-900 font-mono text-[10px]">{bem.numero_serie || '—'}</p>
-                        </div>
-                        <div>
-                          <p className="text-slate-500 font-bold">Processador</p>
-                          <p className="text-slate-900">{bem.modelo_processador || '—'}</p>
-                        </div>
-                        <div>
-                          <p className="text-slate-500 font-bold">Qtd. CPU</p>
-                          <p className="text-slate-900">{bem.qtde_processadores || '—'}</p>
-                        </div>
-                        <div>
-                          <p className="text-slate-500 font-bold">RAM</p>
-                          <p className="text-slate-900">{bem.ram || '—'}</p>
-                        </div>
-                        <div>
-                          <p className="text-slate-500 font-bold">Armazenamento</p>
-                          <p className="text-slate-900">{bem.armazenamento || '—'}</p>
-                        </div>
-                        <div>
-                          <p className="text-slate-500 font-bold">Quantidade</p>
-                          <p className="text-slate-900">{bem.qtde}</p>
-                        </div>
-                        <div>
-                          <p className="text-slate-500 font-bold">Data Aquisição</p>
-                          <p className="text-slate-900">{bem.data_aquisicao}</p>
-                        </div>
-                        <div>
-                          <p className="text-slate-500 font-bold">Valor (R$)</p>
-                          <p className="text-slate-900 font-bold">{bem.valor?.toFixed(2) || '0,00'}</p>
-                        </div>
-                        <div>
-                          <p className="text-slate-500 font-bold">Departamento</p>
-                          <p className="text-slate-900">{bem.departamento}</p>
-                        </div>
-                        <div>
-                          <p className="text-slate-500 font-bold">Localização</p>
-                          <p className="text-slate-900">{bem.localizacao}</p>
-                        </div>
-                        <div>
-                          <p className="text-slate-500 font-bold">Responsável</p>
-                          <p className="text-slate-900">{bem.responsavel || '—'}</p>
-                        </div>
-                        <div>
-                          <p className="text-slate-500 font-bold">Criado Por</p>
-                          <p className="text-slate-900 text-[10px]">{bem.criado_por}</p>
-                        </div>
-                        <div className="col-span-2">
-                          <p className="text-slate-500 font-bold">Criado em</p>
-                          <p className="text-slate-900 text-[10px]">{bem.criado_em}</p>
-                        </div>
-                        <div className="col-span-2">
-                          <p className="text-slate-500 font-bold">Atualizado em</p>
-                          <p className="text-slate-900 text-[10px]">{bem.atualizado_em}</p>
-                        </div>
-                      </div>
-
-                      {/* historico */}
-                      {bem.historico && bem.historico.length > 0 && (
-                        <div className="mt-4 pt-4 border-t border-slate-200">
-                          <p className="text-slate-500 font-bold text-xs mb-3">Histórico ({bem.historico.length})</p>
-                          <div className="space-y-2 max-h-40 overflow-y-auto">
-                            {bem.historico.map((hist, idx) => (
-                              <div key={idx} className="bg-white p-2 rounded border border-slate-200 text-[10px]">
-                                <p className="font-bold text-slate-900">{hist.acao}</p>
-                                <p className="text-slate-600">{hist.usuario} - {hist.data}</p>
-                                {hist.detalhes && <p className="text-slate-500 mt-1">{hist.detalhes}</p>}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
+          <footer className="bg-black text-white px-6 py-4 flex flex-wrap items-center justify-between gap-6 mt-auto">
+            <div className="flex items-center gap-8">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-white/10 rounded-lg">
+                  <Box className="w-4 h-4 text-white" />
                 </div>
-              ))}
+                <div>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider leading-none mb-1">Total de itens</p>
+                  <p className="text-xl font-bold leading-none">{stats.totalItems}</p>
+                </div>
+              </div>
+
+              <div className="w-px h-8 bg-white/20" />
+
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-white/10 rounded-lg">
+                  <DollarSign className="w-4 h-4 text-white" />
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider leading-none mb-1">Valor total em bens</p>
+                  <p className="text-xl font-bold leading-none">
+                    {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(stats.totalValue)}
+                  </p>
+                </div>
+              </div>
             </div>
-          </>
-        )}
+
+            <div className="flex items-center gap-2 text-slate-400 text-xs font-medium">
+              <span>Exibindo {bens.length} ativos</span>
+            </div>
+          </footer>
+        </div>
       </main>
+
+      {/* Modal de Histórico */}
+      {selectedBemHistory && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-y-auto">
+            <div className="sticky top-0 flex items-center justify-between p-6 border-b border-slate-200 bg-white">
+              <h2 className="text-xl font-bold text-black">Histórico de Alterações</h2>
+              <button onClick={handleCloseHistory} className="p-2 hover:bg-slate-100 rounded-lg transition">
+                <X className="w-5 h-5 text-black" />
+              </button>
+            </div>
+
+            <div className="p-6">
+              <h3 className="font-bold text-black mb-4">{selectedBemHistory.nome_item}</h3>
+              
+              {(!selectedBemHistory.historico || selectedBemHistory.historico.length === 0) ? (
+                <p className="text-slate-500 text-center py-8">Nenhum histórico de alterações registrado</p>
+              ) : (
+                <div className="space-y-4">
+                  {selectedBemHistory.historico.map((item, index) => (
+                    <div key={index} className="border border-slate-200 rounded-lg p-4 bg-slate-50">
+                      <div className="flex items-start justify-between mb-2">
+                        <span className="font-bold text-black">{item.acao}</span>
+                        <span className="text-xs text-slate-500">{item.data}</span>
+                      </div>
+                      <p className="text-sm text-slate-600 mb-2">Por: {item.usuario}</p>
+                      {item.detalhes && <p className="text-sm text-slate-600">Detalhes: {item.detalhes}</p>}
+                      {item.novo_departamento && <p className="text-xs text-slate-500">Departamento: {item.novo_departamento}</p>}
+                      {item.novo_responsavel && <p className="text-xs text-slate-500">Responsável: {item.novo_responsavel}</p>}
+                      {item.novo_status && <p className="text-xs text-slate-500">Status: {item.novo_status}</p>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Edição */}
+      {selectedBemEdit && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 flex items-center justify-between p-6 border-b border-slate-200 bg-white">
+              <h2 className="text-xl font-bold text-black">Editar Bem</h2>
+              <button onClick={handleCloseEdit} className="p-2 hover:bg-slate-100 rounded-lg transition">
+                <X className="w-5 h-5 text-black" />
+              </button>
+            </div>
+
+            <div className="p-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-bold text-black mb-2">Nome do Item *</label>
+                  <input
+                    type="text"
+                    value={editFormData.nome_item || ''}
+                    onChange={(e) => setEditFormData({ ...editFormData, nome_item: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-sm text-black focus:border-black outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold text-black mb-2">Categoria *</label>
+                  <select
+                    value={editFormData.categoria || ''}
+                    onChange={(e) => setEditFormData({ ...editFormData, categoria: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-sm text-black focus:border-black outline-none"
+                  >
+                    <option value="">Selecione...</option>
+                    {categorias.map(c => <option key={c.id} value={c.nome}>{c.nome}</option>)}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold text-black mb-2">Marca</label>
+                  <select
+                    value={editFormData.marca || ''}
+                    onChange={(e) => setEditFormData({ ...editFormData, marca: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-sm text-black focus:border-black outline-none"
+                  >
+                    <option value="">Selecione...</option>
+                    {marcas.map(m => <option key={m.id} value={m.nome}>{m.nome}</option>)}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold text-black mb-2">Código do Modelo</label>
+                  <input
+                    type="text"
+                    value={editFormData.codigo_modelo || ''}
+                    onChange={(e) => setEditFormData({ ...editFormData, codigo_modelo: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-sm text-black focus:border-black outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold text-black mb-2">Número de Série</label>
+                  <input
+                    type="text"
+                    value={editFormData.numero_serie || ''}
+                    onChange={(e) => setEditFormData({ ...editFormData, numero_serie: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-sm text-black focus:border-black outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold text-black mb-2">Quantidade *</label>
+                  <input
+                    type="number"
+                    value={editFormData.qtde || 0}
+                    onChange={(e) => setEditFormData({ ...editFormData, qtde: Number(e.target.value) })}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-sm text-black focus:border-black outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold text-black mb-2">Departamento *</label>
+                  <select
+                    value={editFormData.departamento || ''}
+                    onChange={(e) => setEditFormData({ ...editFormData, departamento: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-sm text-black focus:border-black outline-none"
+                  >
+                    <option value="">Selecione...</option>
+                    {departamentos.map(d => <option key={d.id} value={d.nome}>{d.nome}</option>)}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold text-black mb-2">Localização</label>
+                  <input
+                    type="text"
+                    value={editFormData.localizacao || ''}
+                    onChange={(e) => setEditFormData({ ...editFormData, localizacao: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-sm text-black focus:border-black outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold text-black mb-2">Responsável</label>
+                  <input
+                    type="text"
+                    value={editFormData.responsavel || ''}
+                    onChange={(e) => setEditFormData({ ...editFormData, responsavel: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-sm text-black focus:border-black outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold text-black mb-2">Data de Aquisição</label>
+                  <input
+                    type="date"
+                    value={editFormData.data_aquisicao || ''}
+                    onChange={(e) => setEditFormData({ ...editFormData, data_aquisicao: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-sm text-black focus:border-black outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold text-black mb-2">Valor (R$)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={editFormData.valor || 0}
+                    onChange={(e) => setEditFormData({ ...editFormData, valor: Number(e.target.value) })}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-sm text-black focus:border-black outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold text-black mb-2">Status *</label>
+                  <select
+                    value={editFormData.status || ''}
+                    onChange={(e) => setEditFormData({ ...editFormData, status: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-sm text-black focus:border-black outline-none"
+                  >
+                    <option value="">Selecione...</option>
+                    {status.map(s => <option key={s.id} value={s.nome}>{s.nome}</option>)}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold text-black mb-2">Processador</label>
+                  <input
+                    type="text"
+                    value={editFormData.modelo_processador || ''}
+                    onChange={(e) => setEditFormData({ ...editFormData, modelo_processador: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-sm text-black focus:border-black outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold text-black mb-2">RAM</label>
+                  <input
+                    type="text"
+                    value={editFormData.ram || ''}
+                    onChange={(e) => setEditFormData({ ...editFormData, ram: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-sm text-black focus:border-black outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold text-black mb-2">Armazenamento</label>
+                  <input
+                    type="text"
+                    value={editFormData.armazenamento || ''}
+                    onChange={(e) => setEditFormData({ ...editFormData, armazenamento: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-sm text-black focus:border-black outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="mt-6 flex items-center justify-end gap-3">
+                <button
+                  onClick={handleCloseEdit}
+                  className="px-4 py-2 text-sm font-bold text-slate-600 hover:text-black transition"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleSaveEdit}
+                  disabled={isSaving}
+                  className="px-6 py-2 bg-black text-white rounded-lg text-sm font-bold hover:bg-slate-800 transition disabled:bg-slate-400 flex items-center gap-2"
+                >
+                  {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                  {isSaving ? 'Salvando...' : 'Salvar alterações'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

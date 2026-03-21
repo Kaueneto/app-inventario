@@ -1,12 +1,25 @@
 'use client';
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
+import { db } from '@/lib/firebase';
+import { collection, onSnapshot } from 'firebase/firestore';
+import { Bem } from '@/lib/types';
+import { Loader2 } from 'lucide-react';
+import {
+  BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  ResponsiveContainer, ComposedChart
+} from 'recharts';
+import { format, parse } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
 
 export default function DashboardPage() {
   const router = useRouter();
   const { user, loading } = useAuth();
+  const [bens, setBens] = useState<(Bem & { id: string })[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -14,12 +27,104 @@ export default function DashboardPage() {
     }
   }, [user, loading, router]);
 
-  if (loading) {
+  useEffect(() => {
+    if (!user) return;
+    setIsLoading(true);
+    const unsubscribe = onSnapshot(collection(db, 'bens'), (snapshot) => {
+      const bensData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as (Bem & { id: string })[];
+      setBens(bensData);
+      setIsLoading(false);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  const stats = useMemo(() => ({
+    totalItens: bens.reduce((acc, b) => acc + (Number(b.qtde) || 0), 0),
+    totalValor: bens.reduce((acc, b) => acc + (Number(b.valor) || 0), 0),
+    totalBens: bens.length,
+    categorias: new Set(bens.map(b => b.categoria)).size,
+  }), [bens]);
+
+  const marcasData = useMemo(() => {
+    const marcasMap = new Map<string, number>();
+    bens.forEach(bem => {
+      const marca = bem.marca || 'Sem marca';
+      marcasMap.set(marca, (marcasMap.get(marca) || 0) + Number(bem.qtde || 0));
+    });
+    return Array.from(marcasMap, ([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
+  }, [bens]);
+
+  const categoriasData = useMemo(() => {
+    const categoriasMap = new Map<string, number>();
+    bens.forEach(bem => {
+      const categoria = bem.categoria || 'Indefinida';
+      categoriasMap.set(categoria, (categoriasMap.get(categoria) || 0) + Number(bem.qtde || 0));
+    });
+    return Array.from(categoriasMap, ([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
+  }, [bens]);
+
+  const statusData = useMemo(() => {
+    const statusMap = new Map<string, number>();
+    bens.forEach(bem => {
+      const status = bem.status || 'Indefinido';
+      statusMap.set(status, (statusMap.get(status) || 0) + Number(bem.qtde || 0));
+    });
+    return Array.from(statusMap, ([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
+  }, [bens]);
+
+  const departamentosData = useMemo(() => {
+    const departamentosMap = new Map<string, number>();
+    bens.forEach(bem => {
+      const depto = bem.departamento || 'Indefinido';
+      departamentosMap.set(depto, (departamentosMap.get(depto) || 0) + Number(bem.qtde || 0));
+    });
+    return Array.from(departamentosMap, ([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
+  }, [bens]);
+
+  const valoresCategorias = useMemo(() => {
+    const categoriasMap = new Map<string, number>();
+    bens.forEach(bem => {
+      const categoria = bem.categoria || 'Indefinida';
+      categoriasMap.set(categoria, (categoriasMap.get(categoria) || 0) + (Number(bem.valor || 0) * Number(bem.qtde || 1)));
+    });
+    return Array.from(categoriasMap, ([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
+  }, [bens]);
+
+  const aquisicoesTempo = useMemo(() => {
+    const aquisMap = new Map<string, { data: string; quantidade: number }>();
+    bens.forEach(bem => {
+      if (bem.data_aquisicao) {
+        const chave = bem.data_aquisicao.substring(0, 7);
+        if (aquisMap.has(chave)) {
+          const item = aquisMap.get(chave)!;
+          item.quantidade += Number(bem.qtde || 1);
+        } else {
+          aquisMap.set(chave, { data: chave, quantidade: Number(bem.qtde || 1) });
+        }
+      }
+    });
+    
+    return Array.from(aquisMap.values())
+      .sort((a, b) => a.data.localeCompare(b.data))
+      .slice(-12);
+  }, [bens]);
+
+  const CORES = ['#000000', '#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6'];
+
+  if (loading || isLoading) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
+      <div className="flex items-center justify-center min-h-screen bg-white">
         <div className="text-center">
-          <div className="w-12 h-12 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-gray-600">Carregando...</p>
+          <Loader2 className="w-12 h-12 animate-spin text-black mx-auto mb-4" />
+          <p className="text-gray-600">Carregando dashboard...</p>
         </div>
       </div>
     );
@@ -30,105 +135,201 @@ export default function DashboardPage() {
   }
 
   return (
-    <main className="p-4 md:p-8">
-      <div className="max-w-7xl mx-auto">
-      
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-800 mb-2">
-            Dashboard
-          </h1>
-          <p className="text-gray-600">
-            Olá, {user.email}
-          </p>
-        </div>
+    <main className="flex-1 overflow-auto bg-gray-50">
+      <div className="px-4 md:px-6 py-6">
+        <div className="mx-auto w-full">
+          
+          {/* Header */}
+          <div className="mb-8">
+            <h1 className="text-3xl font-bold text-black mb-2">Dashboard</h1>
+            <p className="text-gray-600">Olá, {user.email}</p>
+          </div>
 
-        {/* quick Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <div className="bg-white rounded-lg shadow-sm p-6">
-            <div className="flex items-center justify-between">
+          {/* Stats Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+            <div className="bg-black rounded-xl shadow-sm p-6">
               <div>
-                <p className="text-gray-600 text-sm">Total de Bens</p>
-                <p className="text-3xl font-bold text-gray-800 mt-2">--</p>
+                <p className="text-white/80 text-sm font-medium mb-2">Total de Itens</p>
+                <p className="text-3xl font-bold text-white">{stats.totalItens.toLocaleString('pt-BR')}</p>
               </div>
-              <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
-                <svg
-                  className="w-6 h-6 text-blue-600"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M20 7l-8-4-8 4m0 0l8 4m-8-4v10l8 4m0-10l8 4m-8-4v10"
-                  />
-                </svg>
+            </div>
+
+            <div className="bg-blue-500 rounded-xl shadow-sm p-6">
+              <div>
+                <p className="text-white/80 text-sm font-medium mb-2">Valor Total em Bens</p>
+                <p className="text-3xl font-bold text-white">
+                  {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(stats.totalValor)}
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-green-500 rounded-xl shadow-sm p-6">
+              <div>
+                <p className="text-white/80 text-sm font-medium mb-2">Total de Bens</p>
+                <p className="text-3xl font-bold text-white">{stats.totalBens}</p>
+              </div>
+            </div>
+
+            <div className="bg-purple-500 rounded-xl shadow-sm p-6">
+              <div>
+                <p className="text-white/80 text-sm font-medium mb-2">Categorias</p>
+                <p className="text-3xl font-bold text-white">{stats.categorias}</p>
               </div>
             </div>
           </div>
 
-          <div className="bg-white rounded-lg shadow-sm p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-gray-600 text-sm">Valor Total</p>
-                <p className="text-3xl font-bold text-gray-800 mt-2">--</p>
-              </div>
-              <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
-                <svg
-                  className="w-6 h-6 text-green-600"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
-              </div>
+          {/* Gráficos - Primeira Linha */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+            {/* Marcas */}
+            <div className="bg-white rounded-lg shadow-sm p-6">
+              <h2 className="text-lg font-bold text-black mb-4">Distribuição por Marca</h2>
+              {marcasData.length > 0 ? (
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={marcasData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis dataKey="name" angle={-45} textAnchor="end" height={100} tick={{ fontSize: 12 }} />
+                    <YAxis tick={{ fontSize: 12 }} />
+                    <Tooltip cursor={{ fill: 'rgba(0,0,0,0.05)' }} />
+                    <Bar dataKey="value" fill="#000" />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <p className="text-gray-500 text-center py-12">Sem dados</p>
+              )}
+            </div>
+
+            {/* Categorias - Pizza */}
+            <div className="bg-white rounded-lg shadow-sm p-6">
+              <h2 className="text-lg font-bold text-black mb-4">Distribuição por Categoria</h2>
+              {categoriasData.length > 0 ? (
+                <ResponsiveContainer width="100%" height={300}>
+                  <PieChart>
+                    <Pie
+                      data={categoriasData}
+                      cx="50%"
+                      cy="50%"
+                      labelLine={false}
+                      label={({ name, value }) => `${name}: ${value}`}
+                      outerRadius={100}
+                      fill="#000"
+                      dataKey="value"
+                    >
+                      {categoriasData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={CORES[index % CORES.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <p className="text-gray-500 text-center py-12">Sem dados</p>
+              )}
             </div>
           </div>
 
-          <div className="bg-white rounded-lg shadow-sm p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-gray-600 text-sm">Departamentos</p>
-                <p className="text-3xl font-bold text-gray-800 mt-2">--</p>
-              </div>
-              <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
-                <svg
-                  className="w-6 h-6 text-purple-600"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M17 20h5v-2a3 3 0 00-5.856-1.487M15 10a3 3 0 11-6 0 3 3 0 016 0zM6 20h12v-2a9 9 0 00-12 0v2z"
-                  />
-                </svg>
-              </div>
+          {/* Status */}
+          <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+            <h2 className="text-lg font-bold text-black mb-4">Status dos Itens</h2>
+            {statusData.length > 0 ? (
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={statusData} layout="vertical">
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis type="number" tick={{ fontSize: 12 }} />
+                  <YAxis dataKey="name" type="category" width={120} tick={{ fontSize: 12 }} />
+                  <Tooltip />
+                  <Bar dataKey="value" fill="#3B82F6" />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <p className="text-gray-500 text-center py-12">Sem dados</p>
+            )}
+          </div>
+
+          {/* Segunda linha de gráficos */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+            {/* Departamentos */}
+            <div className="bg-white rounded-lg shadow-sm p-6">
+              <h2 className="text-lg font-bold text-black mb-4">Itens por Departamento</h2>
+              {departamentosData.length > 0 ? (
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={departamentosData} layout="vertical" margin={{ left: 150 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis type="number" tick={{ fontSize: 12 }} />
+                    <YAxis dataKey="name" type="category" width={140} tick={{ fontSize: 11 }} />
+                    <Tooltip />
+                    <Bar dataKey="value" fill="#10B981" />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <p className="text-gray-500 text-center py-12">Sem dados</p>
+              )}
+            </div>
+
+            {/* Valores por Categoria */}
+            <div className="bg-white rounded-lg shadow-sm p-6">
+              <h2 className="text-lg font-bold text-black mb-4">Valor Investido por Categoria</h2>
+              {valoresCategorias.length > 0 ? (
+                <ResponsiveContainer width="100%" height={300}>
+                  <AreaChart data={valoresCategorias}>
+                    <defs>
+                      <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#000" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="#000" stopOpacity={0.1} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis dataKey="name" angle={-45} textAnchor="end" height={80} tick={{ fontSize: 11 }} />
+                    <YAxis tick={{ fontSize: 12 }} />
+                    <Tooltip
+                      formatter={(value) => new Intl.NumberFormat('pt-BR', {
+                        style: 'currency',
+                        currency: 'BRL',
+                      }).format(Number(value))}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="value"
+                      stroke="#000"
+                      fillOpacity={1}
+                      fill="url(#colorValue)"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : (
+                <p className="text-gray-500 text-center py-12">Sem dados</p>
+              )}
             </div>
           </div>
-        </div>
 
-        {/* info section */}
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
-          <h3 className="font-semibold text-blue-900 mb-2">
-            Bem-vindo ao Dashboard
-          </h3>
-          <p className="text-blue-800 text-sm">
-            Este é seu painel de controle do inventário. Use o menu no canto superior esquerdo para acessar:
-          </p>
-          <ul className="text-blue-800 text-sm mt-3 space-y-1 list-disc list-inside">
-            <li>Cadastrar Novo Usuário</li>
-            <li>Cadastrar Novos bens</li>
-          </ul>
+          {/* Aquisições ao longo do tempo */}
+          <div className="bg-white rounded-lg shadow-sm p-6">
+            <h2 className="text-lg font-bold text-black mb-4">Aquisições ao Longo do Tempo (Últimos 12 Meses)</h2>
+            {aquisicoesTempo.length > 0 ? (
+              <ResponsiveContainer width="100%" height={350}>
+                <AreaChart data={aquisicoesTempo}>
+                  <defs>
+                    <linearGradient id="colorAquis" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="#3B82F6" stopOpacity={0.1} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis dataKey="data" tick={{ fontSize: 12 }} />
+                  <YAxis tick={{ fontSize: 12 }} label={{ value: 'Quantidade', angle: -90, position: 'insideLeft' }} />
+                  <Tooltip />
+                  <Area
+                    type="monotone"
+                    dataKey="quantidade"
+                    stroke="#3B82F6"
+                    fillOpacity={1}
+                    fill="url(#colorAquis)"
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <p className="text-gray-500 text-center py-12">Sem dados de aquisições</p>
+            )}
+          </div>
         </div>
       </div>
     </main>

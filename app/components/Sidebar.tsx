@@ -172,14 +172,14 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
       {/* Overlay - Transparente */}
       {isOpen && (
         <div
-          className="fixed inset-0 bg-black/10 z-30"
+          className="fixed inset-0 bg-black/10 z-40"
           onClick={onClose}
         />
       )}
 
       {/* Sidebar Menu */}
       <div
-        className={`fixed top-0 left-0 h-screen w-64 bg-white shadow-2xl z-40 transform transition-transform duration-300 ease-in-out ${
+        className={`fixed top-0 left-0 h-screen w-64 bg-white shadow-2xl z-50 transform transition-transform duration-300 ease-in-out ${
           isOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
@@ -213,12 +213,12 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
             <Link key={item.href} href={item.href}>
               <button
                 onClick={onClose}
-                className="w-full flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-blue-50 rounded-lg transition duration-200 group"
+                className="w-full flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-amber-50 rounded-lg transition duration-200 group"
               >
-                <div className="text-gray-600 group-hover:text-blue-600">
+                <div className="text-gray-600 group-hover:text-amber-600">
                   {item.icon}
                 </div>
-                <span className="text-sm font-medium group-hover:text-blue-600">
+                <span className="text-sm font-medium group-hover:text-amber-600">
                   {item.label}
                 </span>
               </button>

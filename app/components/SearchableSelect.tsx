@@ -58,10 +58,17 @@ export default function SearchableSelect({
     setSearchTerm('');
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && filteredOptions.length > 0) {
+      e.preventDefault();
+      handleSelect(filteredOptions[0].id);
+    }
+  };
+
   return (
     <div ref={containerRef} className="relative w-full">
       {label && (
-        <label className="block text-[11px] font-bold text-slate-600 mb-1.5 ml-1">
+        <label className="block text-base font-semibold text-slate-700 mb-2">
           {label}
           {required && '*'}
         </label>
@@ -69,7 +76,7 @@ export default function SearchableSelect({
 
       <div
         onClick={() => setIsOpen(!isOpen)}
-        className={`relative px-4 py-3 bg-white border border-slate-200 rounded-xl text-slate-900 text-sm cursor-pointer transition-all outline-none focus:ring-1 focus:ring-slate-950 hover:border-slate-300 ${className}`}
+        className={`relative px-4 py-3 bg-white border border-slate-200 rounded-xl text-slate-900 text-sm cursor-pointer transition-all outline-none ${isOpen ? 'border-amber-500 ring-1 ring-amber-500' : 'hover:border-slate-300'} ${className}`}
       >
         <div className="flex items-center justify-between">
           <span className={selectedOption ? 'text-slate-900 font-medium' : 'text-slate-400'}>
@@ -92,7 +99,8 @@ export default function SearchableSelect({
               placeholder="Pesquisar..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:ring-1 focus:ring-slate-950 placeholder:text-slate-400"
+              onKeyDown={handleKeyDown}
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 placeholder:text-slate-400"
             />
           </div>
 
