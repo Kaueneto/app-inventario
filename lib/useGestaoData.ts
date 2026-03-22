@@ -1,6 +1,8 @@
+'use client';
+
 import { useState, useEffect } from 'react';
-import { db } from '@/lib/firebase';
-import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { supabase } from '@/lib/supabase';
+import type { Categoria, Marca, Departamento, StatusItem } from '@/lib/supabase';
 
 interface GestaoItem {
   id: string;
@@ -12,6 +14,7 @@ interface GestaoData {
   status: GestaoItem[];
   departamentos: GestaoItem[];
   marcas: GestaoItem[];
+  tiposBem: GestaoItem[];
   loading: boolean;
   error: string | null;
 }
@@ -21,92 +24,165 @@ export function useGestaoData(): GestaoData {
   const [status, setStatus] = useState<GestaoItem[]>([]);
   const [departamentos, setDepartamentos] = useState<GestaoItem[]>([]);
   const [marcas, setMarcas] = useState<GestaoItem[]>([]);
+  const [tiposBem, setTiposBem] = useState<GestaoItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
-    let unsubscribers: (() => void)[] = [];
+    setError(null);
 
-    try {
-      // carregar Categorias
-      const categoriasUnsub = onSnapshot(
-        query(collection(db, 'categorias'), orderBy('criado_em', 'desc')),
-        (snapshot) => {
-          const data = snapshot.docs.map((doc) => ({
-            id: doc.id,
-            nome: doc.data().nome,
-          }));
-          setCategorias(data);
-        },
-        (err) => {
-          console.error('erro ao buscar categorias:', err);
-          setError('erro ao carregar categorias');
+    const fetchData = async () => {
+      try {
+        // buscar Categorias
+        const { data: categoriasData, error: categoriaError } = await supabase
+          .from('categorias')
+          .select('id, nome')
+          .order('criado_em', { ascending: false });
+
+        if (categoriaError) throw categoriaError;
+        setCategorias(categoriasData || []);
+
+        // buscar Status
+        const { data: statusData, error: statusError } = await supabase
+          .from('status')
+          .select('id, nome')
+          .order('criado_em', { ascending: false });
+
+        if (statusError) throw statusError;
+        setStatus(statusData || []);
+
+        // buscar Departamentos
+        const { data: departamentosData, error: departamentoError } = await supabase
+          .from('departamentos')
+          .select('id, nome')
+          .order('criado_em', { ascending: false });
+
+        if (departamentoError) throw departamentoError;
+        setDepartamentos(departamentosData || []);
+
+        // buscar Marcas
+        const { data: marcasData, error: marcasError } = await supabase
+          .from('marcas')
+          .select('id, nome')
+          .order('criado_em', { ascending: false });
+
+        if (marcasError) throw marcasError;
+        setMarcas(marcasData || []);
+
+        // buscar Tipos de Bem
+        const { data: tiposBemData, error: tiposBemError } = await supabase
+          .from('tipos_bem')
+          .select('id, nome')
+          .order('criado_em', { ascending: false });
+
+        if (tiposBemError) throw tiposBemError;
+        setTiposBem(tiposBemData || []);
+
+        setLoading(false);
+      } catch (err: any) {
+        console.error('erro ao buscar dados de gestão:', err);
+        setError(err.message || 'erro ao carregar dados');
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+
+    // configurar real-time subscriptions
+    const channels: any[] = [];
+
+    const categoriasChannel = supabase
+      .channel('categorias-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'categorias' },
+        () => {
+          // recarregar quando tiver mudanças
+          supabase
+            .from('categorias')
+            .select('id, nome')
+            .order('criado_em', { ascending: false })
+            .then(({ data }) => setCategorias(data || []));
         }
-      );
-      unsubscribers.push(categoriasUnsub);
+      )
+      .subscribe();
 
-      // carregar Status
-      const statusUnsub = onSnapshot(
-        query(collection(db, 'status'), orderBy('criado_em', 'desc')),
-        (snapshot) => {
-          const data = snapshot.docs.map((doc) => ({
-            id: doc.id,
-            nome: doc.data().nome,
-          }));
-          setStatus(data);
-        },
-        (err) => {
-          console.error('erro ao buscar status:', err);
-          setError('erro ao carregar status');
+    channels.push(categoriasChannel);
+
+    const statusChannel = supabase
+      .channel('status-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'status' },
+        () => {
+          supabase
+            .from('status')
+            .select('id, nome')
+            .order('criado_em', { ascending: false })
+            .then(({ data }) => setStatus(data || []));
         }
-      );
-      unsubscribers.push(statusUnsub);
+      )
+      .subscribe();
 
-      // carregar Departamentos
-      const departamentosUnsub = onSnapshot(
-        query(collection(db, 'departamentos'), orderBy('criado_em', 'desc')),
-        (snapshot) => {
-          const data = snapshot.docs.map((doc) => ({
-            id: doc.id,
-            nome: doc.data().nome,
-          }));
-          setDepartamentos(data);
-        },
-        (err) => {
-          console.error('erro ao buscar departamentos:', err);
-          setError('erro ao carregar departamentos');
+    channels.push(statusChannel);
+
+    const departamentosChannel = supabase
+      .channel('departamentos-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'departamentos' },
+        () => {
+          supabase
+            .from('departamentos')
+            .select('id, nome')
+            .order('criado_em', { ascending: false })
+            .then(({ data }) => setDepartamentos(data || []));
         }
-      );
-      unsubscribers.push(departamentosUnsub);
+      )
+      .subscribe();
 
-      // carregar Marcas
-      const marcasUnsub = onSnapshot(
-        query(collection(db, 'marcas'), orderBy('criado_em', 'desc')),
-        (snapshot) => {
-          const data = snapshot.docs.map((doc) => ({
-            id: doc.id,
-            nome: doc.data().nome,
-          }));
-          setMarcas(data);
-        },
-        (err) => {
-          console.error('erro ao buscar marcas:', err);
-          setError('erro ao carregar marcas');
+    channels.push(departamentosChannel);
+
+    const marcasChannel = supabase
+      .channel('marcas-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'marcas' },
+        () => {
+          supabase
+            .from('marcas')
+            .select('id, nome')
+            .order('criado_em', { ascending: false })
+            .then(({ data }) => setMarcas(data || []));
         }
-      );
-      unsubscribers.push(marcasUnsub);
+      )
+      .subscribe();
 
-      setLoading(false);
-    } catch (err: any) {
-      console.error('erro ao configurar listeners:', err);
-      setError('erro ao carregar dados');
-      setLoading(false);
-    }
+    channels.push(marcasChannel);
 
-    // limpar
+    const tiposBemChannel = supabase
+      .channel('tipos_bem-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'tipos_bem' },
+        () => {
+          supabase
+            .from('tipos_bem')
+            .select('id, nome')
+            .order('criado_em', { ascending: false })
+            .then(({ data }) => setTiposBem(data || []));
+        }
+      )
+      .subscribe();
+
+    channels.push(tiposBemChannel);
+
+    // Cleanup
     return () => {
-      unsubscribers.forEach((unsub) => unsub());
+      channels.forEach(channel => {
+        supabase.removeChannel(channel);
+      });
     };
   }, []);
 
@@ -115,6 +191,7 @@ export function useGestaoData(): GestaoData {
     status,
     departamentos,
     marcas,
+    tiposBem,
     loading,
     error,
   };

@@ -3,7 +3,8 @@
 import React, { useState, useEffect } from 'react';
 import { Loader2, Plus, Trash2, RotateCw } from 'lucide-react';
 import Toast from './Toast';
-import { useGestaoFirebase } from '@/lib/useGestaoFirebase';
+import { useAuth } from '@/lib/auth-context';
+import { supabase } from '@/lib/supabase';
 
 interface Item {
   id: string;
@@ -27,6 +28,7 @@ export default function GestaoForm({
   loading: externalLoading = false,
   externalItems,
 }: GestaoFormProps) {
+  const { user } = useAuth();
   const [items, setItems] = useState<Item[]>(externalItems || []);
   const [novoItem, setNovoItem] = useState('');
   const [loading, setLoading] = useState(false);
@@ -34,22 +36,38 @@ export default function GestaoForm({
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState<'success' | 'error'>('success');
 
-  const { fetchItems: fetchFirebaseItems, addItem, deleteItem } = useGestaoFirebase(colecao);
+  //pega o token de autenticação para as requisições à API
+  const getAuthHeader = async (): Promise<Record<string, string>> => {
+    const { data, error } = await supabase.auth.getSession();
 
-
-  useEffect(() => {
-    if (externalItems) {
-      setItems(externalItems);
+    if (error || !data.session?.access_token) {
+      return {};
     }
-  }, [externalItems]);
 
-  
+    return {
+      Authorization: `Bearer ${data.session.access_token}`,
+    };
+  };
+
   const fetchItems = async () => {
-    if (externalItems) return; 
+    if (externalItems) return;
 
     setLoading(true);
     try {
-      const data = await fetchFirebaseItems();
+      const authHeader = await getAuthHeader();
+      const response = await fetch(`/api/gestao/${colecao}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeader,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('Erro ao buscar itens');
+      }
+
+      const data = await response.json();
       setItems(data);
       onFetch?.(data);
       setToastMessage('Atualizado com sucesso!');
@@ -75,7 +93,22 @@ export default function GestaoForm({
 
     setLoading(true);
     try {
-      const novoReg = await addItem(novoItem);
+      const authHeader = await getAuthHeader();
+      const response = await fetch(`/api/gestao/${colecao}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeader,
+        },
+        body: JSON.stringify({ nome: novoItem }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Erro ao adicionar');
+      }
+
+      const novoReg = await response.json();
       setItems([novoReg, ...items]);
       setNovoItem('');
       setToastMessage(`${titulo} adicionado com sucesso!`);
@@ -93,7 +126,20 @@ export default function GestaoForm({
     if (!confirm(`Tem certeza que deseja deletar "${nome}"?`)) return;
 
     try {
-      await deleteItem(id);
+      const authHeader = await getAuthHeader();
+      const response = await fetch(`/api/gestao/${colecao}/${id}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeader,
+        },
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Erro ao deletar');
+      }
+
       setItems(items.filter((item) => item.id !== id));
       setToastMessage('Deletado com sucesso!');
       setToastType('success');
@@ -120,7 +166,6 @@ export default function GestaoForm({
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-2xl font-bold text-slate-900 mb-2">{titulo}</h1>
-          <p className="text-sm text-slate-500">Gerencie os itens do seu catálogo</p>
         </div>
 
         {/* Formulário de add */}

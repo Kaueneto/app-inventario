@@ -1,46 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/firebase';
-import { deleteDoc, doc } from 'firebase/firestore';
-import { verifyIdToken } from '@/lib/verify-token';
+import { getSupabaseServerClient } from '@/lib/supabase-server';
 
-type CollectionType = 'categorias' | 'status' | 'departamentos' | 'marcas';
+type CollectionType = 'categorias' | 'status' | 'departamentos' | 'marcas' | 'tipos_bem';
 
 const COLLECTIONS: Record<CollectionType, string> = {
   categorias: 'categorias',
   status: 'status',
   departamentos: 'departamentos',
   marcas: 'marcas',
+  tipos_bem: 'tipos_bem',
 };
-
-// verificar autenticação
-async function verifyAuth(request: NextRequest) {
-  const token = request.headers.get('authorization')?.replace('Bearer ', '');
-  if (!token) {
-    return null;
-  }
-  
-  try {
-    const decoded = await verifyIdToken(token);
-    return decoded;
-  } catch (error) {
-    return null;
-  }
-}
 
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ colecao: string; id: string }> }
 ) {
   try {
-    // verificar autenticação
-    const user = await verifyAuth(request);
-    if (!user) {
-      return NextResponse.json(
-        { error: 'Não autenticado' },
-        { status: 401 }
-      );
-    }
-
+    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+    const supabase = getSupabaseServerClient(token || undefined);
     const { colecao, id } = await params;
     const validColecao = colecao as CollectionType;
 
@@ -58,11 +35,28 @@ export async function DELETE(
       );
     }
 
-    await deleteDoc(doc(db, colecao, id));
+    const { error } = await supabase
+      .from(colecao)
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.error('Erro ao deletar item:', error);
+      return NextResponse.json(
+        { error: 'Erro ao deletar item' },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json({ success: true });
   } catch (error: any) {
     console.error('Erro ao deletar item:', error);
+    if (error?.message?.includes('NEXT_PUBLIC_SUPABASE_ANON_KEY')) {
+      return NextResponse.json(
+        { error: 'Configuracao ausente: defina NEXT_PUBLIC_SUPABASE_ANON_KEY no .env' },
+        { status: 500 }
+      );
+    }
     return NextResponse.json(
       { error: 'Erro ao deletar item' },
       { status: 500 }

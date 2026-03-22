@@ -5,6 +5,7 @@ export interface User {
   email: string;
   displayName?: string;
   role?: 'admin' | 'user';
+  mustSetPassword?: boolean;
 }
 
 export interface Bem {
@@ -21,6 +22,7 @@ export interface Bem {
   localizacao: string;
   responsavel: string;
   data_aquisicao: string; // ISO format: YYYY-MM-DD
+  data_expiracao_garantia?: string; // ISO format: YYYY-MM-DD
   valor: number;
   qtde_processadores?: number;
   modelo_processador?: string;

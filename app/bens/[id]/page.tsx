@@ -3,30 +3,36 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
-import { db } from '@/lib/firebase';
-import { doc, getDoc, updateDoc, deleteDoc, arrayUnion } from 'firebase/firestore';
-import { Bem, Historico, STATUS_OPTIONS } from '@/lib/types';
+import { supabase } from '@/lib/supabase';
+import type { BemSupabase, HistoricoItem } from '@/lib/supabase';
 import Link from 'next/link';
+
+interface BemDetail extends BemSupabase {
+  historico?: HistoricoItem[];
+}
+
+const STATUS_OPTIONS = ['Ativo', 'Inativo', 'Em Manutenção', 'Descartado'];
 
 export default function BemDetailPage() {
   const router = useRouter();
   const params = useParams();
   const bemId = params.id as string;
   const { user, loading: authLoading } = useAuth();
-  const [bem, setBem] = useState<Bem | null>(null);
+  const [bem, setBem] = useState<BemDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [showMovimentacao, setShowMovimentacao] = useState(false);
+  const [historico, setHistorico] = useState<HistoricoItem[]>([]);
 
   // dados da movimentação
   const [movimentacao, setMovimentacao] = useState({
     acao: '',
     detalhes: '',
-    novo_departamento: bem?.departamento || '',
+    novo_departamento: bem?.departamento_id || '',
     novo_responsavel: bem?.responsavel || '',
-    novo_status: bem?.status || 'Em uso',
+    novo_status: bem?.status_id || '',
   });
 
   useEffect(() => {
@@ -40,22 +46,33 @@ export default function BemDetailPage() {
 
     const fetchBem = async () => {
       try {
-        const docRef = doc(db, 'bens', bemId);
-        const docSnap = await getDoc(docRef);
+        const { data: bemData, error: bemError } = await supabase
+          .from('bens')
+          .select('*')
+          .eq('id', bemId)
+          .single();
 
-        if (docSnap.exists()) {
-          setBem({
-            id: docSnap.id,
-            ...docSnap.data(),
-          } as Bem);
-          setMovimentacao((prev) => ({
-            ...prev,
-            novo_departamento: docSnap.data().departamento || '',
-            novo_responsavel: docSnap.data().responsavel || '',
-            novo_status: docSnap.data().status || 'Em uso',
-          }));
-        } else {
+        if (bemError) {
           setError('Bem não encontrado');
+          return;
+        }
+
+        setBem(bemData as BemDetail);
+        setMovimentacao((prev) => ({
+          ...prev,
+          novo_departamento: bemData.departamento_id || '',
+          novo_responsavel: bemData.responsavel || '',
+          novo_status: bemData.status_id || '',
+        }));
+
+        const { data: historicoData, error: historicoError } = await supabase
+          .from('historico')
+          .select('*')
+          .eq('bem_id', bemId)
+          .order('criado_em', { ascending: false });
+
+        if (!historicoError && historicoData) {
+          setHistorico(historicoData);
         }
       } catch (err) {
         console.error('erro ao buscar bem:', err);
@@ -74,43 +91,75 @@ export default function BemDetailPage() {
     setError(null);
 
     try {
-      const novoHistorico: Historico = {
-        data: new Date().toISOString(),
+      //cria registro de historico
+      const novoHistorico = {
+        bem_id: bemId,
         acao: movimentacao.acao,
         usuario: user?.email || 'Sistema',
         detalhes: movimentacao.detalhes,
-        novo_departamento: movimentacao.novo_departamento,
-        novo_responsavel: movimentacao.novo_responsavel,
-        novo_status: movimentacao.novo_status,
+        criado_em: new Date().toISOString(),
       };
 
-      const docRef = doc(db, 'bens', bemId);
+      const { error: historicoError } = await supabase
+        .from('historico')
+        .insert([novoHistorico]);
 
-      // atualizar o bem com novo histórico e novos valores se mudaram
+      if (historicoError) {
+        console.error('erro ao registrar movimentação:', historicoError);
+        setError('erro ao registrar movimentação');
+        setSaving(false);
+        return;
+      }
+
+
+      //atualiza bem se o status/departamento/responsável mudou
       const updateData: any = {
-        historico: arrayUnion(novoHistorico),
         atualizado_em: new Date().toISOString(),
       };
 
-      if (movimentacao.novo_departamento !== bem?.departamento) {
-        updateData.departamento = movimentacao.novo_departamento;
+      if (movimentacao.novo_departamento !== bem?.departamento_id) {
+        updateData.departamento_id = movimentacao.novo_departamento || null;
       }
       if (movimentacao.novo_responsavel !== bem?.responsavel) {
-        updateData.responsavel = movimentacao.novo_responsavel;
+        updateData.responsavel = movimentacao.novo_responsavel || null;
       }
-      if (movimentacao.novo_status !== bem?.status) {
-        updateData.status = movimentacao.novo_status;
+      if (movimentacao.novo_status !== bem?.status_id) {
+        updateData.status_id = movimentacao.novo_status || null;
       }
 
-      await updateDoc(docRef, updateData);
+      if (Object.keys(updateData).length > 1) {
+        const { error: updateError } = await supabase
+          .from('bens')
+          .update(updateData)
+          .eq('id', bemId);
 
-      // recarreagr dados
-      const docSnap = await getDoc(docRef);
-      if (docSnap.exists()) {
-        setBem({
-          id: docSnap.id,
-          ...docSnap.data(),
-        } as Bem);
+        if (updateError) {
+          console.error('erro ao atualizar bem:', updateError);
+          setError('erro ao atualizar bem');
+          setSaving(false);
+          return;
+        }
+      }
+
+
+      const { data: bemData, error: bemError } = await supabase
+        .from('bens')
+        .select('*')
+        .eq('id', bemId)
+        .single();
+
+      if (!bemError && bemData) {
+        setBem(bemData as BemDetail);
+      }
+
+      const { data: historicoData } = await supabase
+        .from('historico')
+        .select('*')
+        .eq('bem_id', bemId)
+        .order('criado_em', { ascending: false });
+
+      if (historicoData) {
+        setHistorico(historicoData);
       }
 
       setShowMovimentacao(false);
@@ -134,7 +183,18 @@ export default function BemDetailPage() {
 
     setSaving(true);
     try {
-      await deleteDoc(doc(db, 'bens', bemId));
+      const { error } = await supabase
+        .from('bens')
+        .delete()
+        .eq('id', bemId);
+
+      if (error) {
+        console.error('erro ao deletar bem:', error);
+        setError('erro ao deletar bem');
+        setSaving(false);
+        return;
+      }
+
       router.push('/bens');
     } catch (err) {
       console.error('erro ao deletar bem:', err);
@@ -200,11 +260,11 @@ export default function BemDetailPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <p className="text-sm text-gray-600">Categoria</p>
-                  <p className="text-lg font-medium text-gray-800">{bem.categoria}</p>
+                  <p className="text-lg font-medium text-gray-800">{bem.categoria_id || '-'}</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-600">Marca</p>
-                  <p className="text-lg font-medium text-gray-800">{bem.marca || '-'}</p>
+                  <p className="text-lg font-medium text-gray-800">{bem.marca_id || '-'}</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-600">Código do Modelo</p>
@@ -222,18 +282,18 @@ export default function BemDetailPage() {
                   <p className="text-sm text-gray-600">Status</p>
                   <span
                     className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${
-                      bem.status === 'Em uso'
+                      bem.status_id === 'ativo'
                         ? 'bg-green-100 text-green-800'
-                        : bem.status === 'Conserto'
+                        : bem.status_id === 'em-manutencao'
                         ? 'bg-yellow-100 text-yellow-800'
-                        : bem.status === 'Sucata'
+                        : bem.status_id === 'descartado'
                         ? 'bg-red-100 text-red-800'
-                        : bem.status === 'Emprestado'
+                        : bem.status_id === 'inativo'
                         ? 'bg-blue-100 text-blue-800'
                         : 'bg-gray-100 text-gray-800'
                     }`}
                   >
-                    {bem.status}
+                    {bem.status_id || 'Indefinido'}
                   </span>
                 </div>
               </div>
@@ -395,32 +455,16 @@ export default function BemDetailPage() {
               )}
 
               <div className="space-y-3 max-h-96 overflow-y-auto">
-                {bem.historico && bem.historico.length > 0 ? (
-                  bem.historico
-                    .slice()
-                    .reverse()
-                    .map((h, idx) => (
-                      <div key={idx} className="border-l-4 border-blue-500 pl-4 py-2">
-                        <p className="font-medium text-gray-800">{h.acao}</p>
-                        <p className="text-sm text-gray-600">
-                          {new Date(h.data).toLocaleString('pt-BR')} • por {h.usuario}
-                        </p>
-                        {h.detalhes && <p className="text-sm text-gray-700 mt-1">{h.detalhes}</p>}
-                        {(h.novo_status || h.novo_departamento || h.novo_responsavel) && (
-                          <div className="text-sm text-gray-600 mt-1 space-y-1">
-                            {h.novo_status && (
-                              <p>Status alterado para: <span className="font-medium">{h.novo_status}</span></p>
-                            )}
-                            {h.novo_departamento && (
-                              <p>Departamento alterado para: <span className="font-medium">{h.novo_departamento}</span></p>
-                            )}
-                            {h.novo_responsavel && (
-                              <p>Responsável alterado para: <span className="font-medium">{h.novo_responsavel}</span></p>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    ))
+                {historico && historico.length > 0 ? (
+                  historico.map((h, idx) => (
+                    <div key={idx} className="border-l-4 border-blue-500 pl-4 py-2">
+                      <p className="font-medium text-gray-800">{h.acao}</p>
+                      <p className="text-sm text-gray-600">
+                        {new Date(h.data).toLocaleString('pt-BR')} • por {h.usuario}
+                      </p>
+                      {h.detalhes && <p className="text-sm text-gray-700 mt-1">{h.detalhes}</p>}
+                    </div>
+                  ))
                 ) : (
                   <p className="text-gray-600 text-sm">Sem movimentações registradas</p>
                 )}
@@ -436,15 +480,15 @@ export default function BemDetailPage() {
               <div className="space-y-4">
                 <div>
                   <p className="text-sm text-gray-600">Departamento</p>
-                  <p className="text-lg font-medium text-gray-800">{bem.departamento}</p>
+                  <p className="text-lg font-medium text-gray-800">{bem.departamento_id || '-'}</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-600">Localização</p>
-                  <p className="text-lg font-medium text-gray-800">{bem.localizacao}</p>
+                  <p className="text-lg font-medium text-gray-800">{bem.localizacao || '-'}</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-600">Responsável</p>
-                  <p className="text-lg font-medium text-gray-800">{bem.responsavel}</p>
+                  <p className="text-lg font-medium text-gray-800">{bem.responsavel || '-'}</p>
                 </div>
               </div>
             </div>

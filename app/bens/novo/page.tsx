@@ -3,48 +3,51 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
-import { db, storage } from '@/lib/firebase';
-import { collection, addDoc } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { supabase } from '@/lib/supabase';
 import Toast from '@/app/components/Toast';
 import SearchableSelect from '@/app/components/SearchableSelect';
 import { 
-  ChevronLeft, Upload, Package, Cpu, 
-  MapPin, Loader2, X, FileIcon, Info 
+  Package, Cpu,
+  MapPin, Loader2, Paperclip, FileText, FileImage, XCircle
 } from 'lucide-react';
-import { CATEGORIAS, DEPARTAMENTOS, STATUS_OPTIONS, Bem, Historico } from '@/lib/types';
 import { useGestaoData } from '@/lib/useGestaoData';
+
+const ATTACHMENTS_BUCKET = 'bens-anexos';
+const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
+
+type TipoAnexo = 'nota_fiscal' | 'foto' | 'documento' | 'outro';
 
 export default function NovoBemPage() {
   const router = useRouter();
   const { user, loading } = useAuth();
-  const { categorias, departamentos, marcas, status, loading: gestaoLoading } = useGestaoData();
+  const { categorias, departamentos, marcas, status, tiposBem, loading: gestaoLoading } = useGestaoData();
   
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
+  const [tipoAnexoPadrao, setTipoAnexoPadrao] = useState<TipoAnexo>('documento');
+  const [anexos, setAnexos] = useState<File[]>([]);
 
-  const [formData, setFormData] = useState<Partial<Bem>>({
+  const [formData, setFormData] = useState({
     nome_item: '',
-    categoria: '',
-    marca: '',
+    categoria_id: '',
+    tipo_bem_id: '',
+    marca_id: '',
     ram: '',
     armazenamento: '',
     codigo_modelo: '',
     numero_serie: '',
     qtde: 1,
-    departamento: '',
+    departamento_id: '',
     localizacao: '',
     responsavel: '',
     data_aquisicao: new Date().toISOString().split('T')[0],
+    data_expiracao_garantia: '',
     valor: 0,
     qtde_processadores: 0,
     modelo_processador: '',
-    status: '',
-    historico: [],
-    nota_fiscal: '',
+    status_id: '',
   });
 
   // iniciar com primeiro item de cada categoria se não estiverem carregando
@@ -52,7 +55,7 @@ export default function NovoBemPage() {
     if (!gestaoLoading && categorias.length > 0) {
       setFormData(prev => ({
         ...prev,
-        categoria: prev.categoria || categorias[0]?.nome || '',
+        categoria_id: prev.categoria_id || categorias[0]?.id || '',
       }));
     }
   }, [categorias, gestaoLoading]);
@@ -61,7 +64,7 @@ export default function NovoBemPage() {
     if (!gestaoLoading && departamentos.length > 0) {
       setFormData(prev => ({
         ...prev,
-        departamento: prev.departamento || departamentos[0]?.nome || '',
+        departamento_id: prev.departamento_id || departamentos[0]?.id || '',
       }));
     }
   }, [departamentos, gestaoLoading]);
@@ -70,10 +73,19 @@ export default function NovoBemPage() {
     if (!gestaoLoading && status.length > 0) {
       setFormData(prev => ({
         ...prev,
-        status: prev.status || status[0]?.nome || '',
+        status_id: prev.status_id || status[0]?.id || '',
       }));
     }
   }, [status, gestaoLoading]);
+
+  useEffect(() => {
+    if (!gestaoLoading && tiposBem.length > 0) {
+      setFormData(prev => ({
+        ...prev,
+        tipo_bem_id: prev.tipo_bem_id || tiposBem[0]?.id || '',
+      }));
+    }
+  }, [tiposBem, gestaoLoading]);
 
   useEffect(() => {
     if (!loading && !user) router.push('/auth');
@@ -87,12 +99,45 @@ export default function NovoBemPage() {
     }));
   };
 
-  const handleSelectChange = (field: string, value: string | { nome: string; id?: string }) => {
-    const fieldValue = typeof value === 'string' ? value : value?.nome || '';
+  const handleSelectChange = (field: string, value: string) => {
     setFormData((prev) => ({
       ...prev,
-      [field]: fieldValue,
+      [field]: value,
     }));
+  };
+
+  const sanitizeFileName = (fileName: string) => {
+    return fileName
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9._-]/g, '_');
+  };
+
+  const getAttachmentTypeFromFile = (file: File): TipoAnexo => {
+    const lower = file.name.toLowerCase();
+    if (file.type.startsWith('image/')) return 'foto';
+    if (lower.includes('nota') || lower.includes('nf')) return 'nota_fiscal';
+    if (lower.endsWith('.pdf') || lower.endsWith('.doc') || lower.endsWith('.docx')) return 'documento';
+    return tipoAnexoPadrao;
+  };
+
+  const handleAnexosChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    const validFiles = files.filter((file) => file.size <= MAX_FILE_SIZE_BYTES);
+    const invalidFiles = files.filter((file) => file.size > MAX_FILE_SIZE_BYTES);
+
+    if (invalidFiles.length > 0) {
+      setError(`Alguns arquivos excedem 10MB e foram ignorados: ${invalidFiles.map((f) => f.name).join(', ')}`);
+    }
+
+    setAnexos((prev) => [...prev, ...validFiles]);
+    e.target.value = '';
+  };
+
+  const removeAnexo = (index: number) => {
+    setAnexos((prev) => prev.filter((_, i) => i !== index));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -100,54 +145,135 @@ export default function NovoBemPage() {
     setSaving(true);
     setError(null);
     try {
-      let fileUrl = '';
-      if (selectedFile) {
-        const fileRef = ref(storage, `bens_arquivos/${Date.now()}_${selectedFile.name}`);
-        await uploadBytes(fileRef, selectedFile);
-        fileUrl = await getDownloadURL(fileRef);
-      }
-
-      const historicoInicial: Historico = {
-        data: new Date().toISOString().split('T')[0],
-        acao: "Equipamento cadastrado no sistema",
-        usuario: user?.email || 'Sistema'
-      };
-
       const bemData = {
-        ...formData,
-        nota_fiscal: fileUrl,
-        historico: [historicoInicial],
-        criado_em: new Date().toISOString(),
-        atualizado_em: new Date().toISOString(),
+        nome_item: formData.nome_item,
+        categoria_id: formData.categoria_id,
+        tipo_bem_id: formData.tipo_bem_id || null,
+        marca_id: formData.marca_id || null,
+        codigo_modelo: formData.codigo_modelo || null,
+        numero_serie: formData.numero_serie || null,
+        ram: formData.ram || null,
+        armazenamento: formData.armazenamento || null,
+        qtde: formData.qtde,
+        departamento_id: formData.departamento_id,
+        localizacao: formData.localizacao || null,
+        responsavel: formData.responsavel || null,
+        data_aquisicao: formData.data_aquisicao || null,
+        data_expiracao_garantia: formData.data_expiracao_garantia || null,
+        valor: formData.valor,
+        qtde_processadores: formData.qtde_processadores || null,
+        modelo_processador: formData.modelo_processador || null,
+        status_id: formData.status_id,
         criado_por: user?.email,
       };
 
-      await addDoc(collection(db, 'bens'), bemData);
+      const { data, error: insertError } = await supabase
+        .from('bens')
+        .insert([bemData])
+        .select();
+
+      if (insertError) throw insertError;
+
+      // add histórico inicial
+      if (data && data[0]) {
+        const bemId = data[0].id;
+
+        const historicoData = {
+          bem_id: bemId,
+          acao: 'Equipamento cadastrado no sistema',
+          usuario: user?.email || 'Sistema',
+          data: new Date().toISOString(),
+        };
+
+        await supabase.from('historico').insert([historicoData]);
+
+        if (anexos.length > 0) {
+          const anexosRows: {
+            bem_id: string;
+            nome_original: string;
+            storage_path: string;
+            mime_type: string | null;
+            tamanho_bytes: number;
+            tipo_anexo: TipoAnexo;
+            enviado_por: string | null;
+          }[] = [];
+
+          const uploadErrors: string[] = [];
+
+          for (const file of anexos) {
+            const safeName = sanitizeFileName(file.name);
+            const filePath = `${bemId}/${Date.now()}-${safeName}`;
+            const tipoAnexo = getAttachmentTypeFromFile(file);
+
+            const { error: uploadError } = await supabase.storage
+              .from(ATTACHMENTS_BUCKET)
+              .upload(filePath, file, {
+                upsert: false,
+                contentType: file.type || undefined,
+              });
+
+            if (uploadError) {
+              uploadErrors.push(`${file.name}: ${uploadError.message}`);
+              continue;
+            }
+
+            anexosRows.push({
+              bem_id: bemId,
+              nome_original: file.name,
+              storage_path: filePath,
+              mime_type: file.type || null,
+              tamanho_bytes: file.size,
+              tipo_anexo: tipoAnexo,
+              enviado_por: user?.email || null,
+            });
+          }
+
+          if (anexosRows.length > 0) {
+            const { error: anexosInsertError } = await supabase
+              .from('anexos_bem')
+              .insert(anexosRows);
+
+            if (anexosInsertError) {
+              throw new Error(`Bem cadastrado, mas falhou ao registrar anexos: ${anexosInsertError.message}`);
+            }
+          }
+
+          if (uploadErrors.length > 0) {
+            throw new Error(`Bem cadastrado, mas alguns anexos falharam: ${uploadErrors.join(' | ')}`);
+          }
+        }
+      }
       
       setToastMessage(`Bem cadastrado com sucesso!`);
       setShowToast(true);
       
+      // reset formulário
       setFormData({
         nome_item: '',
-        categoria: categorias[0]?.nome || '',
-        marca: marcas[0]?.nome || '',
+        categoria_id: categorias[0]?.id || '',
+        tipo_bem_id: tiposBem[0]?.id || '',
+        marca_id: marcas[0]?.id || '',
         ram: '',
         armazenamento: '',
         codigo_modelo: '',
         numero_serie: '',
         qtde: 1,
-        departamento: departamentos[0]?.nome || '',
+        departamento_id: departamentos[0]?.id || '',
         localizacao: '',
         responsavel: '',
         data_aquisicao: new Date().toISOString().split('T')[0],
+        data_expiracao_garantia: '',
         valor: 0,
         qtde_processadores: 0,
         modelo_processador: '',
-        status: status[0]?.nome || '',
-        historico: [],
-        nota_fiscal: '',
+        status_id: status[0]?.id || '',
       });
-      setSelectedFile(null);
+      setAnexos([]);
+      setTipoAnexoPadrao('documento');
+
+      setTimeout(() => {
+        router.push('/bens/consultar');
+      }, 1500);
       
     } catch (err: any) {
       setError("Erro ao salvar: " + err.message);
@@ -171,6 +297,11 @@ export default function NovoBemPage() {
           <div className="max-w-4xl mb-10">
             <h1 className="text-3xl font-bold text-slate-900">Cadastro de Bens</h1>
             <p className="text-slate-500 text-sm mt-2">Registre um novo ativo no sistema</p>
+            {error && (
+              <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                {error}
+              </div>
+            )}
           </div>
           <form id="bem-form" onSubmit={handleSubmit} className="max-w-4xl space-y-16">
             
@@ -196,8 +327,8 @@ export default function NovoBemPage() {
                   <SearchableSelect
                     label="Categoria"
                     options={categorias}
-                    value={formData.categoria || ''}
-                    onChange={(value) => handleSelectChange('categoria', value)}
+                    value={formData.categoria_id || ''}
+                    onChange={(value) => handleSelectChange('categoria_id', value)}
                     placeholder="Selecione uma categoria"
                     required
                   />
@@ -206,9 +337,18 @@ export default function NovoBemPage() {
                   <SearchableSelect
                     label="Marca"
                     options={marcas}
-                    value={formData.marca || ''}
-                    onChange={(value) => handleSelectChange('marca', value)}
+                    value={formData.marca_id || ''}
+                    onChange={(value) => handleSelectChange('marca_id', value)}
                     placeholder="Selecione uma marca"
+                  />
+                </div>
+                <div>
+                  <SearchableSelect
+                    label="Tipo de Bem"
+                    options={tiposBem}
+                    value={formData.tipo_bem_id || ''}
+                    onChange={(value) => handleSelectChange('tipo_bem_id', value)}
+                    placeholder="Selecione um tipo"
                   />
                 </div>
                 <div>
@@ -298,8 +438,8 @@ export default function NovoBemPage() {
                   <SearchableSelect
                     label="Departamento"
                     options={departamentos}
-                    value={formData.departamento || ''}
-                    onChange={(value) => handleSelectChange('departamento', value)}
+                    value={formData.departamento_id || ''}
+                    onChange={(value) => handleSelectChange('departamento_id', value)}
                     placeholder="Selecione"
                     required
                   />
@@ -338,6 +478,16 @@ export default function NovoBemPage() {
                   />
                 </div>
                 <div>
+                  <label className="block text-base font-semibold text-slate-700 mb-2">Data de Expiração da Garantia</label>
+                  <input
+                    type="date"
+                    name="data_expiracao_garantia"
+                    value={formData.data_expiracao_garantia}
+                    onChange={handleChange}
+                    className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-slate-900 font-medium transition-all outline-none focus:border-amber-500"
+                  />
+                </div>
+                <div>
                   <label className="block text-base font-semibold text-slate-700 mb-2">Valor Unitário</label>
                   <input
                     type="number"
@@ -363,8 +513,8 @@ export default function NovoBemPage() {
                   <SearchableSelect
                     label="Status Atual"
                     options={status}
-                    value={formData.status || ''}
-                    onChange={(value) => handleSelectChange('status', value)}
+                    value={formData.status_id || ''}
+                    onChange={(value) => handleSelectChange('status_id', value)}
                     placeholder="Selecione um status"
                     required
                   />
@@ -385,23 +535,66 @@ export default function NovoBemPage() {
         </main>
         <aside className="w-full lg:w-96 bg-[#FBFCFD] p-6 md:p-10">
           <div className="sticky top-24 space-y-8">
-            <h2 className="text-sm font-semibold text-slate-600 mb-4">Anexos Digitais</h2>
-            
-            {!selectedFile ? (
-              <label className="group cursor-pointer border-2 border-dashed border-slate-200 rounded-3xl p-12 flex flex-col items-center justify-center gap-4 hover:border-slate-900 hover:bg-white transition-all duration-300">
-                <input type="file" hidden onChange={(e) => setSelectedFile(e.target.files?.[0] || null)} />
-                <Upload className="w-6 h-6 text-slate-400 group-hover:text-slate-950 transition-colors" />
-                <span className="block text-sm font-bold text-slate-900">Upload de Arquivo</span>
-              </label>
-            ) : (
-              <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex items-center gap-4">
-                <div className="w-12 h-12 bg-slate-950 rounded-xl flex items-center justify-center"><FileIcon className="w-5 h-5 text-white" /></div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-bold text-slate-900 truncate">{selectedFile.name}</p>
-                </div>
-                <button onClick={() => setSelectedFile(null)} className="p-2 hover:bg-red-50 text-slate-300 hover:text-red-500 rounded-lg transition"><X className="w-5 h-5" /></button>
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex items-center gap-2 mb-4">
+                <Paperclip className="w-4 h-4 text-slate-600" />
+                <h3 className="text-sm font-bold text-slate-800">Anexos do Bem</h3>
               </div>
-            )} 
+
+              <p className="text-xs text-slate-500 mb-4">
+                Envie nota fiscal, fotos, termos ou outros documentos (max. 10MB por arquivo).
+              </p>
+
+              <label className="block text-xs font-semibold text-slate-700 mb-2">Tipo padrão do anexo</label>
+              <select
+                value={tipoAnexoPadrao}
+                onChange={(e) => setTipoAnexoPadrao(e.target.value as TipoAnexo)}
+                className="w-full mb-4 px-3 py-2 bg-white border border-slate-300 rounded-md text-sm text-slate-900 outline-none focus:border-amber-500"
+              >
+                <option value="documento">Documento</option>
+                <option value="nota_fiscal">Nota fiscal</option>
+                <option value="foto">Foto</option>
+                <option value="outro">Outro</option>
+              </select>
+
+              <label className="block text-xs font-semibold text-slate-700 mb-2">Selecionar arquivos</label>
+              <input
+                type="file"
+                multiple
+                onChange={handleAnexosChange}
+                className="w-full text-xs text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-slate-900 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-white hover:file:bg-slate-800"
+              />
+
+              <div className="mt-4 space-y-2 max-h-72 overflow-y-auto">
+                {anexos.length === 0 ? (
+                  <p className="text-xs text-slate-500">Nenhum anexo selecionado.</p>
+                ) : (
+                  anexos.map((file, index) => {
+                    const isImage = file.type.startsWith('image/');
+                    const Icon = isImage ? FileImage : FileText;
+                    return (
+                      <div key={`${file.name}-${index}`} className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2 py-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Icon className="w-4 h-4 text-slate-500 shrink-0" />
+                          <div className="min-w-0">
+                            <p className="text-xs font-medium text-slate-800 truncate">{file.name}</p>
+                            <p className="text-[11px] text-slate-500">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeAnexo(index)}
+                          className="p-1 text-slate-400 hover:text-rose-600 transition"
+                          title="Remover anexo"
+                        >
+                          <XCircle className="w-4 h-4" />
+                        </button>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
           </div>
         </aside>
 

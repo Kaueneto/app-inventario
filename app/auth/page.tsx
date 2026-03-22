@@ -3,21 +3,19 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
-import { useFirebaseAuth } from '@/lib/use-firebase-auth';
 import { LogIn } from 'lucide-react';
 
 export default function LoginPage() {
   const router = useRouter();
-  const { user } = useAuth();
-  const { login, loading, error, setError } = useFirebaseAuth();
+  const { user, mustSetPassword, login, loading, error, setError } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
   React.useEffect(() => {
     if (user) {
-      router.push('/dashboard');
+      router.push(mustSetPassword ? '/auth/primeiro-acesso' : '/dashboard');
     }
-  }, [user, router]);
+  }, [user, mustSetPassword, router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -91,6 +89,12 @@ export default function LoginPage() {
           >
             {loading ? 'Entrando...' : 'Entrar no Sistema'}
           </button>
+
+          <div className="text-center text-sm">
+            <p className="text-slate-600">
+              Primeiro acesso? Use o link recebido no email para entrar e definir sua senha.
+            </p>
+          </div>
         </form>
 
         <div className="mt-8 pt-8 border-t border-slate-100">
