@@ -122,6 +122,7 @@ export default function DashboardPage() {
       }
       return acc;
     }, 0);
+
     const totalEmManutencao = bens.reduce((acc, b) => {
       const nome = getStatusName(b.status_id).toLowerCase();
       if (nome.includes('manuten')) {
@@ -129,7 +130,22 @@ export default function DashboardPage() {
       }
       return acc;
     }, 0);
-    return { totalItens, totalValor, totalBens, categorias, totalEmUso, totalEmManutencao };
+
+    // estoque/guardado/almoxarifado
+    const totalEmEstoque = bens.reduce((acc, b) => {
+      const nome = getStatusName(b.status_id).toLowerCase();
+      if (
+        nome.includes('estoque') ||
+        nome.includes('guardad') ||
+        nome.includes('almox') ||
+        nome.includes('reserva')
+      ) {
+        return acc + (Number(b.qtde) || 0);
+      }
+      return acc;
+    }, 0);
+
+    return { totalItens, totalValor, totalBens, categorias, totalEmUso, totalEmManutencao, totalEmEstoque };
   }, [bens, statusList]);
 
   const marcasData = useMemo(() => {
@@ -240,7 +256,8 @@ export default function DashboardPage() {
           </div>
 
           {/* Stats Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
+
+          <div className="grid grid-cols-1 md:grid-cols-6 gap-4 mb-8">
             <div className="bg-black rounded-xl shadow-sm p-6">
               <div>
                 <p className="text-white/80 text-sm font-medium mb-2">Total de Itens</p>
@@ -275,6 +292,13 @@ export default function DashboardPage() {
               <div>
                 <p className="text-white/80 text-sm font-medium mb-2">Total em Manutenção</p>
                 <p className="text-3xl font-bold text-white">{stats.totalEmManutencao}</p>
+              </div>
+            </div>
+
+            <div className="bg-blue-700 rounded-xl shadow-sm p-6">
+              <div>
+                <p className="text-white/80 text-sm font-medium mb-2">Total em Estoque/guardado</p>
+                <p className="text-3xl font-bold text-white">{stats.totalEmEstoque}</p>
               </div>
             </div>
           </div>
