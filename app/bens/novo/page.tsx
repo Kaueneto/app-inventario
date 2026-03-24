@@ -270,10 +270,6 @@ export default function NovoBemPage() {
       });
       setAnexos([]);
       setTipoAnexoPadrao('documento');
-
-      setTimeout(() => {
-        router.push('/bens/consultar');
-      }, 1500);
       
     } catch (err: any) {
       setError("Erro ao salvar: " + err.message);
@@ -463,7 +459,7 @@ export default function NovoBemPage() {
                     name="responsavel"
                     value={formData.responsavel}
                     onChange={handleChange}
-                    required
+
                     className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-slate-900 font-medium transition-all outline-none focus:border-amber-500"
                   />
                 </div>

@@ -7,6 +7,7 @@ import type { Categoria, Marca, Departamento, StatusItem } from '@/lib/supabase'
 interface GestaoItem {
   id: string;
   nome: string;
+  cor?: string;
 }
 
 interface GestaoData {
@@ -46,7 +47,7 @@ export function useGestaoData(): GestaoData {
         // buscar Status
         const { data: statusData, error: statusError } = await supabase
           .from('status')
-          .select('id, nome')
+          .select('id, nome, cor')
           .order('criado_em', { ascending: false });
 
         if (statusError) throw statusError;
@@ -118,7 +119,7 @@ export function useGestaoData(): GestaoData {
         () => {
           supabase
             .from('status')
-            .select('id, nome')
+            .select('id, nome, cor')
             .order('criado_em', { ascending: false })
             .then(({ data }) => setStatus(data || []));
         }

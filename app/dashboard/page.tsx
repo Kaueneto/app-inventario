@@ -109,12 +109,28 @@ export default function DashboardPage() {
     };
   }, [user]);
 
-  const stats = useMemo(() => ({
-    totalItens: bens.reduce((acc, b) => acc + (Number(b.qtde) || 0), 0),
-    totalValor: bens.reduce((acc, b) => acc + (Number(b.valor) || 0), 0),
-    totalBens: bens.length,
-    categorias: new Set(bens.map(b => b.categoria_id)).size,
-  }), [bens]);
+  const stats = useMemo(() => {
+    const totalItens = bens.reduce((acc, b) => acc + (Number(b.qtde) || 0), 0);
+    const totalValor = bens.reduce((acc, b) => acc + (Number(b.valor) || 0), 0);
+    const totalBens = bens.length;
+    const categorias = new Set(bens.map(b => b.categoria_id)).size;
+    // totais por status
+    const totalEmUso = bens.reduce((acc, b) => {
+      const nome = getStatusName(b.status_id).toLowerCase();
+      if (nome.includes('uso') || nome.includes('ativo')) {
+        return acc + (Number(b.qtde) || 0);
+      }
+      return acc;
+    }, 0);
+    const totalEmManutencao = bens.reduce((acc, b) => {
+      const nome = getStatusName(b.status_id).toLowerCase();
+      if (nome.includes('manuten')) {
+        return acc + (Number(b.qtde) || 0);
+      }
+      return acc;
+    }, 0);
+    return { totalItens, totalValor, totalBens, categorias, totalEmUso, totalEmManutencao };
+  }, [bens, statusList]);
 
   const marcasData = useMemo(() => {
     const marcasMap = new Map<string, number>();
@@ -195,7 +211,7 @@ export default function DashboardPage() {
       .slice(-12);
   }, [bens]);
 
-  const CORES = ['#000000', '#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6'];
+  const CORES = ['#00132d', '#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#000000', '#EC4899', '#14B8A6', '#F97316', '#E11D48'];
 
   if (loading || isLoading || gestaoLoading) {
     return (
@@ -224,7 +240,7 @@ export default function DashboardPage() {
           </div>
 
           {/* Stats Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
             <div className="bg-black rounded-xl shadow-sm p-6">
               <div>
                 <p className="text-white/80 text-sm font-medium mb-2">Total de Itens</p>
@@ -243,15 +259,22 @@ export default function DashboardPage() {
 
             <div className="bg-green-500 rounded-xl shadow-sm p-6">
               <div>
-                <p className="text-white/80 text-sm font-medium mb-2">Total de Bens</p>
+                <p className="text-white/80 text-sm font-medium mb-2">Total de Bens cadastrados</p>
                 <p className="text-3xl font-bold text-white">{stats.totalBens}</p>
               </div>
             </div>
 
             <div className="bg-purple-500 rounded-xl shadow-sm p-6">
               <div>
-                <p className="text-white/80 text-sm font-medium mb-2">Categorias</p>
-                <p className="text-3xl font-bold text-white">{stats.categorias}</p>
+                <p className="text-white/80 text-sm font-medium mb-2">Total em Uso</p>
+                <p className="text-3xl font-bold text-white">{stats.totalEmUso}</p>
+              </div>
+            </div>
+
+            <div className="bg-amber-500 rounded-xl shadow-sm p-6">
+              <div>
+                <p className="text-white/80 text-sm font-medium mb-2">Total em Manutenção</p>
+                <p className="text-3xl font-bold text-white">{stats.totalEmManutencao}</p>
               </div>
             </div>
           </div>

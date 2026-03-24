@@ -17,6 +17,9 @@ interface BemDisplay extends BemSupabase {
   marca_nome?: string;
   departamento_nome?: string;
   status_nome?: string;
+  status_cor?: string;
+  criado_por_nome?: string;
+  _checked?: boolean;
 }
 
 interface AnexoBem {
@@ -49,7 +52,7 @@ export default function ConsultaBensPage() {
   const [showToast, setShowToast] = useState(false);
   const [isFilterVisible, setIsFilterVisible] = useState(true);
   const [selectedBemHistory, setSelectedBemHistory] = useState<BemDisplay | null>(null);
-  const [selectedBemEdit, setSelectedBemEdit] = useState<BemDisplay | null>(null);
+  const [selectedBemEdit, setSelectedBemEdit] = useState<BemDisplay | BemDisplay[] | null>(null);
   const [editFormData, setEditFormData] = useState<Partial<BemDisplay>>({});
   const [isSaving, setIsSaving] = useState(false);
   const [editAnexos, setEditAnexos] = useState<AnexoBemView[]>([]);
@@ -61,6 +64,11 @@ export default function ConsultaBensPage() {
     nome_item: '', marca_nome: '', categoria_nome: '', tipo_bem_nome: '', departamento_nome: '',
     responsavel: '', localizacao: '', status_nome: '', numero_serie: '',
   });
+
+  // estados para sorting e lazy loading
+  const [sortBy, setSortBy] = useState<string>('criado_em');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [hasSearched, setHasSearched] = useState(false);
 
   const stats = useMemo(() => {
     const totalItems = bens.reduce((acc, b) => acc + (Number(b.qtde) || 0), 0);
@@ -101,7 +109,8 @@ export default function ConsultaBensPage() {
   const formatDate = (dateString: string | undefined) => {
     if (!dateString) return '—';
     try {
-      const date = new Date(dateString);
+      // corrige bug de timezone: força parse local para datas vindas do banco no formato YYYY-MM-DD
+      const date = new Date(dateString.length === 10 ? dateString + 'T00:00:00' : dateString);
       const day = String(date.getDate()).padStart(2, '0');
       const month = String(date.getMonth() + 1).padStart(2, '0');
       const year = date.getFullYear();
@@ -283,14 +292,35 @@ export default function ConsultaBensPage() {
         from += pageSize;
       }
 
-      const bemsComNomes = allRows.map((bem) => ({
-        ...bem,
-        categoria_nome: getCategoryName(bem.categoria_id),
-        tipo_bem_nome: getTipoBemName(bem.tipo_bem_id),
-        marca_nome: getBrandName(bem.marca_id),
-        departamento_nome: getDepartmentName(bem.departamento_id),
-        status_nome: getStatusName(bem.status_id),
-      })) as BemDisplay[];
+      // buscar nomes dos usuários em lote
+      const criadoresIds = Array.from(new Set(allRows.map((b) => b.criado_por).filter(Boolean)));
+      let usuariosMap: Record<string, string> = {};
+      if (criadoresIds.length > 0) {
+        const { data: usuariosData } = await supabase
+          .from('usuarios')
+          .select('id, nome, email');
+        if (usuariosData) {
+          usuariosMap = {};
+          for (const u of usuariosData) {
+            usuariosMap[u.id] = u.nome;
+            usuariosMap[u.email] = u.nome;
+          }
+        }
+      }
+
+      const bemsComNomes = allRows.map((bem) => {
+        const statusObj = status.find(s => s.id === bem.status_id);
+        return {
+          ...bem,
+          categoria_nome: getCategoryName(bem.categoria_id),
+          tipo_bem_nome: getTipoBemName(bem.tipo_bem_id),
+          marca_nome: getBrandName(bem.marca_id),
+          departamento_nome: getDepartmentName(bem.departamento_id),
+          status_nome: statusObj?.nome || getStatusName(bem.status_id),
+          status_cor: statusObj?.cor,
+          criado_por_nome: usuariosMap[bem.criado_por] || bem.criado_por || '—',
+        };
+      }) as BemDisplay[];
 
       setAllBens(bemsComNomes);
       setBens(bemsComNomes);
@@ -338,12 +368,45 @@ export default function ConsultaBensPage() {
         return bemValue.includes(value.toLowerCase());
       });
     });
+
+    // aplicar ordenação
+    filtered = filtered.sort((a, b) => {
+      let aVal = (a as any)[sortBy];
+      let bVal = (b as any)[sortBy];
+
+      if (aVal === null || aVal === undefined) aVal = '';
+      if (bVal === null || bVal === undefined) bVal = '';
+
+      if (typeof aVal === 'string') {
+        aVal = aVal.toLowerCase();
+        bVal = (bVal as any).toLowerCase();
+      }
+
+      if (sortOrder === 'asc') {
+        return aVal > bVal ? 1 : aVal < bVal ? -1 : 0;
+      } else {
+        return aVal < bVal ? 1 : aVal > bVal ? -1 : 0;
+      }
+    });
+
     setBens(filtered);
+    setHasSearched(true);
   };
 
   const clearFilters = () => {
     setFilters({ nome_item: '', marca_nome: '', categoria_nome: '', tipo_bem_nome: '', departamento_nome: '', responsavel: '', localizacao: '', status_nome: '', numero_serie: '' });
-    setBens(allBens);
+    setBens([]);
+    setHasSearched(false);
+  };
+
+  const handleColumnSort = (column: string) => {
+    if (sortBy === column) {
+      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortBy(column);
+      setSortOrder('asc');
+    }
+    handleSearch();
   };
 
   const handleOpenHistory = (bem: BemDisplay) => {
@@ -354,12 +417,21 @@ export default function ConsultaBensPage() {
     setSelectedBemHistory(null);
   };
 
-  const handleOpenEdit = (bem: BemDisplay) => {
-    setSelectedBemEdit(bem);
-    setEditFormData({ ...bem });
-    setNewAnexos([]);
-    setAttachmentError(null);
-    loadAnexos(bem.id);
+  const handleOpenEdit = (bensParaEditar: BemDisplay | BemDisplay[]) => {
+    if (Array.isArray(bensParaEditar)) {
+      // edição múltipla: não preencher campos
+      setSelectedBemEdit(bensParaEditar);
+      setEditFormData({});
+      setNewAnexos([]);
+      setAttachmentError(null);
+    } else {
+      // edição única: preencher normalmente
+      setSelectedBemEdit(bensParaEditar);
+      setEditFormData({ ...bensParaEditar });
+      setNewAnexos([]);
+      setAttachmentError(null);
+      loadAnexos(bensParaEditar.id);
+    }
   };
 
   const handleCloseEdit = () => {
@@ -372,55 +444,86 @@ export default function ConsultaBensPage() {
 
   const handleSaveEdit = async () => {
     if (!selectedBemEdit) return;
-    
     try {
       setIsSaving(true);
-      const nomeItem = String(editFormData.nome_item || '').trim();
-      const categoriaId = String(editFormData.categoria_id || '').trim();
-      const departamentoId = String(editFormData.departamento_id || '').trim();
-      const statusId = String(editFormData.status_id || '').trim();
-      const quantidade = Number(editFormData.qtde ?? 0);
+      // se for edição múltipla
+      if (Array.isArray(selectedBemEdit)) {
+        // so envia campos preenchidos
+        const updateData: any = {};
+        if (editFormData.nome_item) updateData.nome_item = String(editFormData.nome_item).trim();
+        if (editFormData.categoria_id) updateData.categoria_id = String(editFormData.categoria_id).trim();
+        if (editFormData.tipo_bem_id) updateData.tipo_bem_id = normalizeTextValue(editFormData.tipo_bem_id);
+        if (editFormData.marca_id) updateData.marca_id = normalizeTextValue(editFormData.marca_id);
+        if (editFormData.codigo_modelo) updateData.codigo_modelo = normalizeTextValue(editFormData.codigo_modelo);
+        if (editFormData.numero_serie) updateData.numero_serie = normalizeTextValue(editFormData.numero_serie);
+        if (editFormData.qtde !== undefined) updateData.qtde = Number(editFormData.qtde);
+        if (editFormData.departamento_id) updateData.departamento_id = String(editFormData.departamento_id).trim();
+        if (editFormData.localizacao) updateData.localizacao = normalizeTextValue(editFormData.localizacao);
+        if (editFormData.responsavel) updateData.responsavel = normalizeTextValue(editFormData.responsavel);
+        if (editFormData.data_aquisicao) updateData.data_aquisicao = normalizeTextValue(editFormData.data_aquisicao);
+        if (editFormData.data_expiracao_garantia) updateData.data_expiracao_garantia = normalizeTextValue(editFormData.data_expiracao_garantia);
+        if (editFormData.valor !== undefined) updateData.valor = Number(editFormData.valor);
+        if (editFormData.status_id) updateData.status_id = String(editFormData.status_id).trim();
+        if (editFormData.modelo_processador) updateData.modelo_processador = normalizeTextValue(editFormData.modelo_processador);
+        if (editFormData.ram) updateData.ram = normalizeTextValue(editFormData.ram);
+        if (editFormData.armazenamento) updateData.armazenamento = normalizeTextValue(editFormData.armazenamento);
+        updateData.atualizado_em = new Date().toISOString();
 
-      if (!nomeItem || !categoriaId || !departamentoId || !statusId || quantidade <= 0) {
-        throw new Error('Preencha os campos obrigatorios e defina quantidade maior que zero');
+        if (Object.keys(updateData).length === 1) throw new Error('Preencha ao menos um campo para atualizar.');
+
+        const ids = selectedBemEdit.map(b => b.id);
+        const { error } = await supabase
+          .from('bens')
+          .update(updateData)
+          .in('id', ids);
+        if (error) throw error;
+        await fetchBens();
+        setShowToast(true);
+        handleCloseEdit();
+        setTimeout(() => setShowToast(false), 3000);
+      } else {
+        // edição única (mantém validação obrigatória)
+        const nomeItem = String(editFormData.nome_item || '').trim();
+        const categoriaId = String(editFormData.categoria_id || '').trim();
+        const departamentoId = String(editFormData.departamento_id || '').trim();
+        const statusId = String(editFormData.status_id || '').trim();
+        const quantidade = Number(editFormData.qtde ?? 0);
+        if (!nomeItem || !categoriaId || !departamentoId || !statusId || quantidade <= 0) {
+          throw new Error('Preencha os campos obrigatorios e defina quantidade maior que zero');
+        }
+        const updateData = {
+          nome_item: nomeItem,
+          categoria_id: categoriaId,
+          tipo_bem_id: normalizeTextValue(editFormData.tipo_bem_id),
+          marca_id: normalizeTextValue(editFormData.marca_id),
+          codigo_modelo: normalizeTextValue(editFormData.codigo_modelo),
+          numero_serie: normalizeTextValue(editFormData.numero_serie),
+          qtde: quantidade,
+          departamento_id: departamentoId,
+          localizacao: normalizeTextValue(editFormData.localizacao),
+          responsavel: normalizeTextValue(editFormData.responsavel),
+          data_aquisicao: normalizeTextValue(editFormData.data_aquisicao),
+          data_expiracao_garantia: normalizeTextValue(editFormData.data_expiracao_garantia),
+          valor: Number(editFormData.valor ?? 0),
+          status_id: statusId,
+          modelo_processador: normalizeTextValue(editFormData.modelo_processador),
+          ram: normalizeTextValue(editFormData.ram),
+          armazenamento: normalizeTextValue(editFormData.armazenamento),
+          atualizado_em: new Date().toISOString(),
+        };
+        const { error } = await supabase
+          .from('bens')
+          .update(updateData)
+          .eq('id', selectedBemEdit.id);
+        if (error) throw error;
+        await uploadPendingAnexos(selectedBemEdit.id);
+        await loadAnexos(selectedBemEdit.id);
+        setNewAnexos([]);
+        await fetchBens();
+        setShowToast(true);
+        handleCloseEdit();
+        setTimeout(() => setShowToast(false), 3000);
       }
-
-      const updateData = {
-        nome_item: nomeItem,
-        categoria_id: categoriaId,
-        tipo_bem_id: normalizeTextValue(editFormData.tipo_bem_id),
-        marca_id: normalizeTextValue(editFormData.marca_id),
-        codigo_modelo: normalizeTextValue(editFormData.codigo_modelo),
-        numero_serie: normalizeTextValue(editFormData.numero_serie),
-        qtde: quantidade,
-        departamento_id: departamentoId,
-        localizacao: normalizeTextValue(editFormData.localizacao),
-        responsavel: normalizeTextValue(editFormData.responsavel),
-        data_aquisicao: normalizeTextValue(editFormData.data_aquisicao),
-        data_expiracao_garantia: normalizeTextValue(editFormData.data_expiracao_garantia),
-        valor: Number(editFormData.valor ?? 0),
-        status_id: statusId,
-        modelo_processador: normalizeTextValue(editFormData.modelo_processador),
-        ram: normalizeTextValue(editFormData.ram),
-        armazenamento: normalizeTextValue(editFormData.armazenamento),
-        atualizado_em: new Date().toISOString(),
-      };
-
-      const { error } = await supabase
-        .from('bens')
-        .update(updateData)
-        .eq('id', selectedBemEdit.id);
-
-      if (error) throw error;
-
-      await uploadPendingAnexos(selectedBemEdit.id);
-      await loadAnexos(selectedBemEdit.id);
-      setNewAnexos([]);
-      
-      await fetchBens();
-      setShowToast(true);
-      handleCloseEdit();
-      setTimeout(() => setShowToast(false), 3000);
     } catch (error) {
       console.error('Erro ao salvar:', error);
     } finally {
@@ -436,269 +539,295 @@ export default function ConsultaBensPage() {
     );
   }
 
-  const labelStyle = "block text-xs font-semibold text-slate-700 mb-1";
-  const inputStyle = "w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-sm text-black placeholder:text-slate-400 focus:border-amber-400 outline-none transition-all";
-  const thStyle = "px-3 py-3 text-left text-[11px] font-bold text-slate-500 uppercase tracking-tight border-b border-slate-200 whitespace-nowrap bg-slate-50";
 
-  return (
-    <div className="min-h-screen bg-white text-black">
-      {showToast && <Toast message="Ação realizada" type="success" onClose={() => setShowToast(false)} />}
+  
+return (
+  <div className="min-h-screen bg-white text-black">
+    {showToast && <Toast message="Ação realizada" type="success" onClose={() => setShowToast(false)} />}
 
-      <nav className="border-b border-slate-200 px-6 h-14 flex items-center justify-between sticky top-0 bg-white z-40">
-        <div className="flex items-center gap-4">
-          <h1 className="text-lg font-bold tracking-tight">Consulta de bens</h1>
-        </div>
-        <div className="flex items-center gap-4">
-          <button onClick={() => setIsFilterVisible(!isFilterVisible)} className="text-sm  flex items-center gap-2 hover:text-slate-600">
-            <Filter className="w-4 h-4" /> {isFilterVisible ? 'Ocultar filtros' : 'Mostrar filtros'}
+    <nav className="border-b border-slate-200 px-6 h-14 flex items-center justify-between sticky top-0 bg-white z-40">
+      <div className="flex items-center gap-4">
+        <h1 className="text-lg font-bold tracking-tight">Consulta de bens</h1>
+      </div>
+      <div className="flex items-center gap-4">
+        <button onClick={() => setIsFilterVisible(!isFilterVisible)} className="text-sm flex items-center gap-2 hover:text-slate-600">
+          <Filter className="w-4 h-4" /> {isFilterVisible ? 'Ocultar filtros' : 'Mostrar filtros'}
+        </button>
+        <Link href="/bens/novo">
+          <button className="bg-black text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-slate-800 transition flex items-center gap-2">
+            <Plus className="w-4 h-4" /> Novo bem
           </button>
-          <Link href="/bens/novo">
-            <button className="bg-black text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-slate-800 transition flex items-center gap-2">
-              <Plus className="w-4 h-4" /> Novo bem
-            </button>
-          </Link>
-        </div>
-      </nav>
+        </Link>
+      </div>
+    </nav>
 
-      <main className="p-6">
-        {isFilterVisible && (
-          <section className="bg-white border border-slate-200 rounded-xl p-6 mb-6 shadow-sm">
-            {/* Primeira linha: inputs de digitação */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
-              <div>
-                <label className={labelStyle}>Nome do item</label>
-                <input className={inputStyle} placeholder="Ex: Servidor..." value={filters.nome_item} onChange={(e) => setFilters({...filters, nome_item: e.target.value})} />
-              </div>
-              <div>
-                <label className={labelStyle}>Responsável</label>
-                <input className={inputStyle} placeholder="Ex: João..." value={filters.responsavel} onChange={(e) => setFilters({...filters, responsavel: e.target.value})} />
-              </div>
-              <div>
-                <label className={labelStyle}>Localização</label>
-                <input className={inputStyle} placeholder="Ex: Sala 202..." value={filters.localizacao} onChange={(e) => setFilters({...filters, localizacao: e.target.value})} />
-              </div>
-              <div>
-                <label className={labelStyle}>Número de série</label>
-                <input className={inputStyle} placeholder="SN..." value={filters.numero_serie} onChange={(e) => setFilters({...filters, numero_serie: e.target.value})} />
-              </div>
+
+    <main className="p-6">
+      {isFilterVisible && (
+        <section className="bg-white border border-slate-200 rounded-xl p-6 mb-6 shadow-sm">
+          {/* Inputs de digitação */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+            <div>
+              <label className="block text-base text-slate-700 mb-1">Nome do item</label>
+              <input className="w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-base text-black placeholder:text-slate-400 focus:border-amber-400 outline-none transition-all" placeholder="Ex: Servidor..." value={filters.nome_item} onChange={(e) => setFilters({...filters, nome_item: e.target.value})} />
             </div>
-
-            {/* Segunda linha: campos de seleção */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
-              <div>
-                <SearchableSelect
-                  label="Marca"
-                  options={marcas}
-                  value={marcas.find(m => m.nome === filters.marca_nome)?.id || ''}
-                  onChange={(id) => {
-                    const marca = marcas.find(m => m.id === id);
-                    setFilters({...filters, marca_nome: marca?.nome || ''});
-                  }}
-                  placeholder="Todas"
-                />
-              </div>
-              <div>
-                <SearchableSelect
-                  label="Categoria"
-                  options={categorias}
-                  value={categorias.find(c => c.nome === filters.categoria_nome)?.id || ''}
-                  onChange={(id) => {
-                    const categoria = categorias.find(c => c.id === id);
-                    setFilters({...filters, categoria_nome: categoria?.nome || ''});
-                  }}
-                  placeholder="Todas"
-                />
-              </div>
-              <div>
-                <SearchableSelect
-                  label="Tipo de bem"
-                  options={tiposBem}
-                  value={tiposBem.find(t => t.nome === filters.tipo_bem_nome)?.id || ''}
-                  onChange={(id) => {
-                    const tipo = tiposBem.find(t => t.id === id);
-                    setFilters({...filters, tipo_bem_nome: tipo?.nome || ''});
-                  }}
-                  placeholder="Todos"
-                />
-              </div>
-              <div>
-                <SearchableSelect
-                  label="Departamento"
-                  options={departamentos}
-                  value={departamentos.find(d => d.nome === filters.departamento_nome)?.id || ''}
-                  onChange={(id) => {
-                    const departamento = departamentos.find(d => d.id === id);
-                    setFilters({...filters, departamento_nome: departamento?.nome || ''});
-                  }}
-                  placeholder="Todos"
-                />
-              </div>
-              <div>
-                <SearchableSelect
-                  label="Status"
-                  options={status}
-                  value={status.find(s => s.nome === filters.status_nome)?.id || ''}
-                  onChange={(id) => {
-                    const st = status.find(s => s.id === id);
-                    setFilters({...filters, status_nome: st?.nome || ''});
-                  }}
-                  placeholder="Todos"
-                />
-              </div>
+            <div>
+              <label className="block text-base text-slate-700 mb-1">Responsável</label>
+              <input className="w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-base text-black placeholder:text-slate-400 focus:border-amber-400 outline-none transition-all" placeholder="Ex: João..." value={filters.responsavel} onChange={(e) => setFilters({...filters, responsavel: e.target.value})} />
             </div>
-
-            <div className="mt-6 flex items-center justify-end gap-3">
-              <button onClick={clearFilters} className="text-xs font-bold text-slate-500 hover:text-black flex items-center gap-1">
-                <RotateCcw className="w-3 h-3" /> Limpar campos
-              </button>
-              <button onClick={handleSearch} className="bg-black text-white px-6 py-2 rounded-lg text-xs font-bold hover:bg-slate-800 transition">
-                Pesquisar
-              </button>
+            <div>
+              <label className="block text-base text-slate-700 mb-1">Localização</label>
+              <input className="w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-base text-black placeholder:text-slate-400 focus:border-amber-400 outline-none transition-all" placeholder="Ex: Sala 202..." value={filters.localizacao} onChange={(e) => setFilters({...filters, localizacao: e.target.value})} />
             </div>
-          </section>
-        )}
-
-        <div className="rounded-2xl border border-slate-200/80 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.06)] overflow-hidden flex flex-col max-h-[75vh]">
-          <div className="overflow-x-auto overflow-y-auto">
-            <table className="w-full border-collapse text-xs">
-              <thead className="sticky top-0 z-30 bg-slate-50/95 backdrop-blur">
-                <tr>
-                  <th className={`${thStyle} sticky left-0 z-40 border-r bg-slate-50/95`}>Ações</th>
-                  <th className={thStyle}>Nome</th>
-                  <th className={thStyle}>Categoria</th>
-                  <th className={thStyle}>Tipo de bem</th>
-                  <th className={thStyle}>Marca</th>
-                  <th className={thStyle}>Modelo</th>
-                  <th className={thStyle}>Série (SN)</th>
-                  <th className={thStyle}>Processador</th>
-                  <th className={thStyle}>RAM</th>
-                  <th className={thStyle}>Armazenamento</th>
-                  <th className={thStyle}>Qtde</th>
-                  <th className={thStyle}>Departamento</th>
-                  <th className={thStyle}>Localização</th>
-                  <th className={thStyle}>Responsável</th>
-                  <th className={thStyle}>Data aquisição</th>
-                  <th className={thStyle}>Data de Expiração da Garantia</th>
-                  <th className={thStyle}>Valor (R$)</th>
-                  <th className={thStyle}>Status</th>
-                  <th className={thStyle}>Cadastrado por</th>
-                  <th className={thStyle}>Dt. Cadastro</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 bg-white">
-                {bens.map((bem) => (
-                  <tr key={bem.id} className="group even:bg-slate-50/40 hover:bg-amber-50/40 transition-colors">
-                    <td className="px-3 py-2 sticky left-0 bg-inherit z-10 border-r border-slate-100">
-                      <div className="flex items-center gap-1">
-                        <button onClick={() => handleOpenEdit(bem)} className="p-1 hover:bg-black hover:text-white rounded transition text-slate-400">
-                          <Edit className="w-3.5 h-3.5" />
-                        </button>
-                        <button onClick={() => handleOpenHistory(bem)} className="p-1 hover:bg-black hover:text-white rounded transition text-slate-400">
-                          <History className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 font-bold text-slate-900">{bem.nome_item}</td>
-                    <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{bem.categoria_nome || '—'}</td>
-                    <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{bem.tipo_bem_nome || '—'}</td>
-                    <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{bem.marca_nome || '—'}</td>
-                    <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{bem.codigo_modelo || '—'}</td>
-                    <td className="px-3 py-2 text-slate-500 font-mono text-[10px] uppercase">{bem.numero_serie || '—'}</td>
-                    <td className="px-3 py-2 text-slate-600">{bem.modelo_processador || '—'}</td>
-                    <td className="px-3 py-2 text-slate-600">{bem.ram || '—'}</td>
-                    <td className="px-3 py-2 text-slate-600">{bem.armazenamento || '—'}</td>
-                      <td className="px-3 py-2 text-center font-bold text-slate-900">{bem.qtde}</td>
-                      <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{bem.departamento_nome || '—'}</td>
-                      <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{bem.localizacao || '—'}</td>
-                      <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{bem.responsavel || '—'}</td>
-                      <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{formatDate(bem.data_aquisicao)}</td>
-                      <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{formatDate(bem.data_expiracao_garantia)}</td>
-                      <td className="px-3 py-2 text-right font-bold text-black whitespace-nowrap">
-                        {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(bem.valor || 0)}
-                      </td>
-                      <td className="px-3 py-2">
-                        <span className={`px-2 py-0.5 border rounded text-[10px] font-bold whitespace-nowrap ${getStatusBadgeClass(bem.status_nome)}`}>
-                          {bem.status_nome || '—'}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-slate-500 text-[10px]">{bem.criado_por || '—'}</td>
-                      <td className="px-3 py-2 text-slate-500 text-[10px]">{formatDate(bem.criado_em)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div>
+              <label className="block text-base text-slate-700 mb-1">Número de série</label>
+              <input className="w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-base text-black placeholder:text-slate-400 focus:border-amber-400 outline-none transition-all" placeholder="SN..." value={filters.numero_serie} onChange={(e) => setFilters({...filters, numero_serie: e.target.value})} />
             </div>
-
-            <footer className="bg-black text-white px-6 py-4 flex flex-wrap items-center justify-between gap-6 mt-auto">
-              <div className="flex items-center gap-8">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-white/10 rounded-lg">
-                    <Box className="w-4 h-4 text-white" />
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider leading-none mb-1">Total de itens</p>
-                    <p className="text-xl font-bold leading-none">{stats.totalItems}</p>
-                  </div>
-                </div>
-
-                <div className="w-px h-8 bg-white/20" />
-
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-white/10 rounded-lg">
-                    <DollarSign className="w-4 h-4 text-white" />
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider leading-none mb-1">Valor total em bens</p>
-                    <p className="text-xl font-bold leading-none">
-                      {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(stats.totalValue)}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 text-slate-400 text-xs font-medium">
-                <span>Exibindo {bens.length} ativos</span>
-              </div>
-            </footer>
           </div>
-        </main>
 
-        {/* Modal de Histórico */}
-        {selectedBemHistory && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-y-auto">
-              <div className="sticky top-0 flex items-center justify-between p-6 border-b border-slate-200 bg-white">
-                <h2 className="text-xl font-bold text-black">Histórico de Alterações</h2>
-                <button onClick={handleCloseHistory} className="p-2 hover:bg-slate-100 rounded-lg transition">
-                  <X className="w-5 h-5 text-black" />
-                </button>
-              </div>
 
-              <div className="p-6">
-                <h3 className="font-bold text-black mb-4">{selectedBemHistory.nome_item}</h3>
-                
-                {(!selectedBemHistory.historico || selectedBemHistory.historico.length === 0) ? (
-                  <p className="text-slate-500 text-center py-8">Nenhum histórico de alterações registrado</p>
-                ) : (
-                  <div className="space-y-4">
-                    {selectedBemHistory.historico.map((item, index) => (
-                      <div key={index} className="border border-slate-200 rounded-lg p-4 bg-slate-50">
-                        <div className="flex items-start justify-between mb-2">
-                          <span className="font-bold text-black">{item.acao}</span>
-                          <span className="text-xs text-slate-500">{new Date(item.data).toLocaleString('pt-BR')}</span>
-                        </div>
-                        <p className="text-sm text-slate-600 mb-2">Por: {item.usuario}</p>
-                        {item.detalhes && <p className="text-sm text-slate-600">Detalhes: {item.detalhes}</p>}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+            <SearchableSelect label="Marca" options={marcas} value={marcas.find(m => m.nome === filters.marca_nome)?.id || ''} onChange={(id) => {
+              const marca = marcas.find(m => m.id === id);
+              setFilters({...filters, marca_nome: marca?.nome || ''});
+            }} placeholder="Todas" />
+            <SearchableSelect label="Categoria" options={categorias} value={categorias.find(c => c.nome === filters.categoria_nome)?.id || ''} onChange={(id) => {
+              const categoria = categorias.find(c => c.id === id);
+              setFilters({...filters, categoria_nome: categoria?.nome || ''});
+            }} placeholder="Todas" />
+            <SearchableSelect label="Tipo de bem" options={tiposBem} value={tiposBem.find(t => t.nome === filters.tipo_bem_nome)?.id || ''} onChange={(id) => {
+              const tipo = tiposBem.find(t => t.id === id);
+              setFilters({...filters, tipo_bem_nome: tipo?.nome || ''});
+            }} placeholder="Todos" />
+            <SearchableSelect label="Departamento" options={departamentos} value={departamentos.find(d => d.nome === filters.departamento_nome)?.id || ''} onChange={(id) => {
+              const departamento = departamentos.find(d => d.id === id);
+              setFilters({...filters, departamento_nome: departamento?.nome || ''});
+            }} placeholder="Todos" />
+            <SearchableSelect label="Status" options={status} value={status.find(s => s.nome === filters.status_nome)?.id || ''} onChange={(id) => {
+              const st = status.find(s => s.id === id);
+              setFilters({...filters, status_nome: st?.nome || ''});
+            }} placeholder="Todos" />
+          </div>
+
+          {/* Botões */}
+          <div className="mt-6 flex items-center justify-end gap-3">
+            <button onClick={clearFilters} className="text-xs font-bold text-slate-500 hover:text-black flex items-center gap-1">
+              <RotateCcw className="w-3 h-3" /> Limpar campos
+            </button>
+            <button onClick={handleSearch} className="bg-black text-white px-6 py-2 rounded-lg text-xs font-bold hover:bg-slate-800 transition">
+              Pesquisar
+            </button>
+          </div>
+        </section>
+      )}
+
+    
+      <div className="mb-4 flex items-center justify-between bg-black text-white px-6 py-4 rounded-xl">
+        <div className="flex items-center gap-8">
+          <div>
+            <p className="text-[10px] text-slate-400 uppercase">Total de itens</p>
+            <p className="text-xl font-bold">{stats.totalItems}</p>
+          </div>
+          <div>
+            <p className="text-[10px] text-slate-400 uppercase">Valor total</p>
+            <p className="text-xl font-bold">
+              {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(stats.totalValue)}
+            </p>
+          </div>
+        </div>
+        <span className="text-xs text-slate-400">Exibindo {bens.length} ativos</span>
+      </div>
+
+ 
+      <div className="rounded-2xl border border-slate-200/80 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.06)] overflow-hidden flex flex-col max-h-[75vh]">
+
+        <div className="flex gap-2 p-4 border-b border-slate-100 bg-slate-50">
+          <button
+           className="px-4 py-2 border border-amber-500 text-amber-500 rounded-lg font-medium hover:bg-amber-500 hover:text-white transition-colors duration-200 active:scale-95 active: disabled:opacity-50"
+            disabled={bens.filter(b => b._checked).length === 0}
+            onClick={() => {
+              const selecionados = bens.filter(b => b._checked);
+              if (selecionados.length === 1) {
+                handleOpenEdit(selecionados[0]);
+              } else if (selecionados.length > 1) {
+                handleOpenEdit(selecionados);
+              }
+            }}
+          >
+            Editar selecionado
+          </button>
+          <button
+            className="bg-rose-500 hover:bg-rose-600 text-white px-4 py-2 rounded font-semibold disabled:opacity-50"
+            disabled={bens.filter(b => b._checked).length === 0}
+            onClick={async () => {
+              const ids = bens.filter(b => b._checked).map(b => b.id);
+              if (ids.length === 0) return;
+              if (!window.confirm(`Excluir ${ids.length} registro(s)?`)) return;
+              await supabase.from('bens').delete().in('id', ids);
+              setBens(bens.filter(b => !ids.includes(b.id)));
+              setAllBens(allBens.filter(b => !ids.includes(b.id)));
+            }}
+          >
+            Excluir selecionados
+          </button>
+        </div>
+        <div className="overflow-x-auto overflow-y-auto">
+          <table className="w-full border-collapse text-xs">
+            <thead className="sticky top-0 z-30 bg-slate-50/95 backdrop-blur">
+              <tr>
+                <th className="px-3 py-2 text-left text-sm font-normal text-slate-500 border-slate-200 whitespace-nowrap bg-slate-50 sticky left-0 z-50 border-r shadow-xl">
+                  <input
+                    type="checkbox"
+                    className="checkbox-custom"
+                    checked={bens.length > 0 && bens.every(b => b._checked)}
+                    ref={el => {
+                      if (el) {
+                        el.indeterminate = bens.some(b => b._checked) && !bens.every(b => b._checked);
+                      }
+                    }}
+                    onChange={e => {
+                      const checked = e.target.checked;
+                      setBens(bens.map(bem => ({ ...bem, _checked: checked })));
+                    }}
+                  />
+                </th>
+                <th className="px-3 py-2 text-left text-sm font-normal text-slate-500 border-slate-200 whitespace-nowrap bg-slate-50 cursor-pointer select-none" onClick={() => handleColumnSort('nome_item')}>
+                  Nome {sortBy === 'nome_item' && (sortOrder === 'asc' ? '▲' : '▼')}
+                </th>
+                <th className="px-3 py-2 text-left text-sm font-normal text-slate-500 border-slate-200 whitespace-nowrap bg-slate-50 cursor-pointer select-none" onClick={() => handleColumnSort('categoria_nome')}>
+                  Categoria {sortBy === 'categoria_nome' && (sortOrder === 'asc' ? '▲' : '▼')}
+                </th>
+                <th className="px-3 py-2 text-left text-sm font-normal text-slate-500 border-slate-200 whitespace-nowrap bg-slate-50 cursor-pointer select-none" onClick={() => handleColumnSort('tipo_bem_nome')}>
+                  Tipo de bem {sortBy === 'tipo_bem_nome' && (sortOrder === 'asc' ? '▲' : '▼')}
+                </th>
+                <th className="px-3 py-2 text-left text-sm font-normal text-slate-500 border-slate-200 whitespace-nowrap bg-slate-50">Modelo</th>
+                <th className="px-3 py-2 text-left text-sm font-normal text-slate-500 border-slate-200 whitespace-nowrap bg-slate-50 cursor-pointer select-none" onClick={() => handleColumnSort('numero_serie')}>
+                  Série (SN) {sortBy === 'numero_serie' && (sortOrder === 'asc' ? '▲' : '▼')}
+                </th>
+                <th className="px-3 py-2 text-left text-sm font-normal text-slate-500 border-slate-200 whitespace-nowrap bg-slate-50">Processador</th>
+                <th className="px-3 py-2 text-left text-sm font-normal text-slate-500 border-slate-200 whitespace-nowrap bg-slate-50">RAM</th>
+                <th className="px-3 py-2 text-left text-sm font-normal text-slate-500 border-slate-200 whitespace-nowrap bg-slate-50">Armazenamento</th>
+                <th className="px-3 py-2 text-left text-sm font-normal text-slate-500 border-slate-200 whitespace-nowrap bg-slate-50 cursor-pointer select-none" onClick={() => handleColumnSort('qtde')}>
+                  Qtde {sortBy === 'qtde' && (sortOrder === 'asc' ? '▲' : '▼')}
+                </th>
+                <th className="px-3 py-2 text-left text-sm font-normal text-slate-500 border-slate-200 whitespace-nowrap bg-slate-50 cursor-pointer select-none" onClick={() => handleColumnSort('departamento_nome')}>
+                  Departamento {sortBy === 'departamento_nome' && (sortOrder === 'asc' ? '▲' : '▼')}
+                </th>
+                <th className="px-3 py-2 text-left text-sm font-normal text-slate-500 border-slate-200 whitespace-nowrap bg-slate-50">Localização</th>
+                <th className="px-3 py-2 text-left text-sm font-normal text-slate-500 border-slate-200 whitespace-nowrap bg-slate-50">Responsável</th>
+                <th className="px-3 py-2 text-left text-sm font-normal text-slate-500 border-slate-200 whitespace-nowrap bg-slate-50 cursor-pointer select-none" onClick={() => handleColumnSort('data_aquisicao')}>
+                  Data aquisição {sortBy === 'data_aquisicao' && (sortOrder === 'asc' ? '^' : '˅')}
+                </th>
+                <th className="px-3 py-2 text-left text-sm font-normal text-slate-500 border-slate-200 whitespace-nowrap bg-slate-50 cursor-pointer select-none" onClick={() => handleColumnSort('data_expiracao_garantia')}>
+                  Data Exp. Garantia {sortBy === 'data_expiracao_garantia' && (sortOrder === 'asc' ? '▲' : '▼')}
+                </th>
+                <th className="px-3 py-2 text-left text-sm font-normal text-slate-500 border-slate-200 whitespace-nowrap bg-slate-50 cursor-pointer select-none" onClick={() => handleColumnSort('valor')}>
+                  Valor (R$) {sortBy === 'valor' && (sortOrder === 'asc' ? '▲' : '▼')}
+                </th>
+                <th className="px-3 py-2 text-left text-sm font-normal text-slate-500 border-slate-200 whitespace-nowrap bg-slate-50 cursor-pointer select-none" onClick={() => handleColumnSort('status_nome')}>
+                  Status {sortBy === 'status_nome' && (sortOrder === 'asc' ? '▲' : '▼')}
+                </th>
+                <th className="px-3 py-2 text-left text-sm font-normal text-slate-500 border-slate-200 whitespace-nowrap bg-slate-50 cursor-pointer select-none" onClick={() => handleColumnSort('criado_por_nome')}>
+                  Cadastrado por {sortBy === 'criado_por_nome' && (sortOrder === 'asc' ? '▲' : '▼')}
+                </th>
+                <th className="px-3 py-2 text-left text-sm font-normal text-slate-500 border-slate-200 whitespace-nowrap bg-slate-50 cursor-pointer select-none" onClick={() => handleColumnSort('criado_em')}>
+                  Dt. Cadastro {sortBy === 'criado_em' && (sortOrder === 'asc' ? '▲' : '▼')}
+                </th>
+                <th className="px-3 py-2 text-left text-sm font-normal text-slate-500 border-slate-200 whitespace-nowrap bg-slate-50">Histórico</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 bg-white">
+              {bens.map((bem: BemDisplay, idx) => (
+                <tr key={bem.id} className="group even:bg-slate-50/40 hover:bg-amber-50/40 transition-colors">
+                  <td className="px-3 py-2">
+                    <input
+                      type="checkbox"
+                      className="checkbox-custom "
+                      checked={!!bem._checked}
+                      onChange={e => {
+                        const checked = e.target.checked;
+                        setBens(bens.map((b, i) => i === idx ? { ...b, _checked: checked } : b));
+                      }}
+                    />
+                  </td>
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    <div className="font-bold text-slate-900">{bem.nome_item}</div>
+                    <div className="text-sm text-slate-500">{bem.marca_nome || '—'}</div>
+                  </td>
+                  <td className="px-3 py-2 text-sm text-slate-600 whitespace-nowrap">{bem.categoria_nome || '—'}</td>
+                  <td className="px-3 py-2 text-sm text-slate-600 whitespace-nowrap">{bem.tipo_bem_nome || '—'}</td>
+                  <td className="px-3 py-2 text-sm text-slate-600 whitespace-nowrap">{bem.codigo_modelo || '—'}</td>
+                  <td className="px-3 py-2 text-sm text-slate-500 font-mono uppercase">{bem.numero_serie || '—'}</td>
+                  <td className="px-3 py-2 text-sm text-slate-600">{bem.modelo_processador || '—'}</td>
+                  <td className="px-3 py-2 text-sm text-slate-600">{bem.ram || '—'}</td>
+                  <td className="px-3 py-2 text-sm text-slate-600">{bem.armazenamento || '—'}</td>
+                  <td className="px-3 py-2 text-center font-bold text-slate-900">{bem.qtde}</td>
+                  <td className="px-3 py-2 text-sm text-slate-600 whitespace-nowrap">{bem.departamento_nome || '—'}</td>
+                  <td className="px-3 py-2 text-sm text-slate-600 whitespace-nowrap">{bem.localizacao || '—'}</td>
+                  <td className="px-3 py-2 text-sm text-slate-600 whitespace-nowrap">{bem.responsavel || '—'}</td>
+                  <td className="px-3 py-2 text-sm text-slate-500 whitespace-nowrap">{formatDate(bem.data_aquisicao)}</td>
+                  <td className="px-3 py-2 text-sm text-slate-500 whitespace-nowrap">{formatDate(bem.data_expiracao_garantia)}</td>
+                  <td className="px-3 py-2 text-right font-bold text-black whitespace-nowrap">
+                    {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(bem.valor || 0)}
+                  </td>
+                  <td className="px-3 py-2">
+                    <span
+                      className={`px-2 py-0.5 border rounded text-sm whitespace-nowrap`}
+                      style={bem.status_cor ? { backgroundColor: bem.status_cor, color: 'white', borderColor: bem.status_cor } : {}}
+                    >
+                      {bem.status_nome || '—'}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-slate-500 text-sm">{bem.criado_por_nome || '—'}</td>
+                  <td className="px-3 py-2 text-slate-500 text-sm">{formatDate(bem.criado_em)}</td>
+                  <td className="px-3 py-2">
+                    <button onClick={() => handleOpenHistory(bem)} className="p-1 hover:bg-black hover:text-white rounded transition text-slate-400" title="Histórico">
+                      <History className="w-3.5 h-3.5" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* modal de historico */}
+      </main>
+      {selectedBemHistory && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-y-auto">
+            <div className="sticky top-0 flex items-center justify-between p-6 border-b border-slate-200 bg-white">
+              <h2 className="text-xl font-bold text-black">Histórico de Alterações</h2>
+              <button onClick={handleCloseHistory} className="p-2 hover:bg-slate-100 rounded-lg transition">
+                <X className="w-5 h-5 text-black" />
+              </button>
+            </div>
+            <div className="p-6">
+              <h3 className="font-bold text-black mb-4">{selectedBemHistory.nome_item}</h3>
+              {(!selectedBemHistory.historico || selectedBemHistory.historico.length === 0) ? (
+                <p className="text-slate-500 text-center py-8">Nenhum histórico de alterações registrado</p>
+              ) : (
+                <div className="space-y-4">
+                  {selectedBemHistory.historico.map((item, index) => (
+                    <div key={index} className="border border-slate-200 rounded-lg p-4 bg-slate-50">
+                      <div className="flex items-start justify-between mb-2">
+                        <span className="font-bold text-black">{item.acao}</span>
+                        <span className="text-xs text-slate-500">{new Date(item.data).toLocaleString('pt-BR')}</span>
                       </div>
-                    ))}
+                      <p className="text-sm text-slate-600 mb-2">Por: {item.usuario}</p>
+                      {item.detalhes && <p className="text-sm text-slate-600">Detalhes: {item.detalhes}</p>}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
           </div>
         </div>
       )}
+    
 
-      {/* Modal de Edição */}
+      {/* Modal de Edição =======================================================================*/}
       {selectedBemEdit && (
         <div className="fixed inset-0 bg-slate-950/55 backdrop-blur-[2px] flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-[0_25px_60px_rgba(15,23,42,0.35)] max-w-6xl w-full max-h-[92vh] overflow-hidden border border-slate-200">
@@ -712,7 +841,7 @@ export default function ConsultaBensPage() {
               </button>
             </div>
 
-            <div className="grid grid-cols-1 xl:grid-cols-[1fr_340px] h-[calc(92vh-88px)] min-h-0 overflow-hidden">
+            <div className=" grid grid-cols-1 xl:grid-cols-[1fr_340px] h-[calc(92vh-88px)] min-h-0 overflow-hidden">
               <div className="overflow-y-auto min-h-0 p-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
@@ -792,7 +921,7 @@ export default function ConsultaBensPage() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-2">Departamento *</label>
+                  <label className="block text-base font-semibold text-slate-700 mb-2">Departamento *</label>
                   <select
                     value={editFormData.departamento_id || ''}
                     onChange={(e) => setEditFormData({ ...editFormData, departamento_id: e.target.value })}

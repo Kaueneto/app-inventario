@@ -62,8 +62,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       );
     }
 
+
     const body = await request.json();
-    const { nome } = body;
+    const { nome, cor } = body;
 
     if (!nome || typeof nome !== 'string' || !nome.trim()) {
       return NextResponse.json(
@@ -94,13 +95,17 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     }
 
     const now = new Date().toISOString();
+    const insertObj: any = {
+      nome: nome.trim(),
+      criado_em: now,
+      atualizado_em: now,
+    };
+    if (colecao === 'status' && cor) {
+      insertObj.cor = cor;
+    }
     const { data, error } = await supabase
       .from(colecao)
-      .insert({
-        nome: nome.trim(),
-        criado_em: now,
-        atualizado_em: now,
-      })
+      .insert(insertObj)
       .select();
 
     if (error) {

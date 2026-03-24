@@ -76,7 +76,7 @@ export default function SearchableSelect({
 
       <div
         onClick={() => setIsOpen(!isOpen)}
-        className={`relative px-4 py-3 bg-white border border-slate-200 rounded-xl text-slate-900 text-sm cursor-pointer transition-all outline-none ${isOpen ? 'border-amber-500 ring-1 ring-amber-500' : 'hover:border-slate-300'} ${className}`}
+        className={`relative px-5 py-2 bg-white border border-slate-200 rounded-xl text-slate-900 text-sm cursor-pointer transition-all outline-none ${isOpen ? 'border-amber-500 ring-1 ring-amber-500' : 'hover:border-slate-300'} ${className}`}
       >
         <div className="flex items-center justify-between">
           <span className={selectedOption ? 'text-slate-900 font-medium' : 'text-slate-400'}>
